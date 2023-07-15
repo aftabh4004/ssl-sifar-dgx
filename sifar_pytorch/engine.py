@@ -31,7 +31,7 @@ from itertools import cycle
 import torch.nn.functional as F
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
-                    data_loader: Iterable, optimizer: torch.optim.Optimizer,
+                    labeled_trainloader: Iterable, unlabeled_trainloader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     world_size: int = 1, distributed: bool = True, amp=True,
@@ -41,21 +41,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     moco_criterion=None, moco_w=0.,
                     byol_criterion=None, byol_w=0.,
                     contrastive_nomixup=False, hard_contrastive=False,
-                    finetune=False
+                    finetune=False,
+                    args=None
                     ):
-    # TODO fix this for finetuning
-    if finetune:
-        model.train(not finetune)
-    else:
-        model.train()
-    #criterion.train()
-    metric_logger = MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 50
 
-    for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
-        
+    def process_samples_target(samples, targets):
         batch_size = targets.size(0)
         if simclr_criterion is not None or simsiam_criterion is not None or moco_criterion is not None or byol_criterion is not None:
             samples = [samples[0].to(device, non_blocking=True), samples[1].to(device, non_blocking=True)]
@@ -80,13 +70,90 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             if mixup_fn is not None:
                 # batch size has to be an even number
                 if batch_size == 1:
-                    continue
+                    return samples, targets
                 if batch_size % 2 != 0:
                      samples, targets = samples[:-1], targets[:-1]
                 samples, targets = mixup_fn(samples, targets)
-        
+                # targets = F.one_hot(targets, num_classes=args.num_classes)
+        return samples, targets
+
+    # TODO fix this for finetuning
+    if finetune:
+        model.train(not finetune)
+    else:
+        model.train()
+
+    #criterion.train()
+
+    lenn = max(len(labeled_trainloader), len(unlabeled_trainloader))
+    if epoch >= args.sup_thresh:
+        data_loader = zip(cycle(labeled_trainloader), unlabeled_trainloader)
+    else:
+        data_loader = labeled_trainloader
+    
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    total_losses = AverageMeter()
+    supervised_losses = AverageMeter()
+    contrastive_losses = AverageMeter()
+    group_contrastive_losses = AverageMeter()
+    pl_losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+
+
+    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('instance_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('group_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Epoch: [{}]'.format(epoch)
+    print_freq = 50
+
+    for data in metric_logger.log_every(data_loader, print_freq, lenn if epoch >= args.sup_thresh else len(labeled_trainloader), header):
+         #reseting losses
+        contrastive_loss = torch.tensor(0.0).cuda()
+        pl_loss = torch.tensor(0.0).cuda()
+        loss = torch.tensor(0.0).cuda()
+        group_contrastive_loss = torch.tensor(0.0).cuda()
+
+        if epoch >= args.sup_thresh:
+            labeled_data,unlabeled_data = data
+            samples_u, targets = unlabeled_data
+            samples_u = samples_u.cuda()
+            targets = targets.cuda()
+            samples_u, _ = process_samples_target(samples_u, targets)
+
+            super_image_3x3, super_image_2x2 = create_super_image(samples_u, isLabeled=False)
+            
+            # save_super_image(super_image_3x3, "super_image_3x3new.jpg")
+            # save_super_image(super_image_2x2, "super_image_2x2new.jpg")
+
+            # print(super_image_3x3.shape, super_image_2x2.shape)
+            
+            output_8f = model(super_image_3x3)
+            output_4f = model(super_image_2x2)
+
+            output_8f_detach = output_8f.detach()
+            contrastive_loss = simclr_loss(torch.softmax(output_8f_detach,dim=1),torch.softmax(output_4f,dim=1), args)
+    
+            grp_unlabeled_8seg = get_group(output_8f_detach)
+            grp_unlabeled_4seg = get_group(output_4f)
+            group_contrastive_loss = compute_group_contrastive_loss(grp_unlabeled_8seg,grp_unlabeled_4seg, args) 
+        else:
+            labeled_data = data
+
+
+        samples, targets = labeled_data
+        samples = samples.cuda()
+        targets = targets.cuda()
+
+        samples, targets = process_samples_target(samples, targets)
+        super_image_lab = create_super_image(samples, isLabeled=True)
+
         with torch.cuda.amp.autocast(enabled=amp):
-            outputs = model(samples)
+            outputs = model(super_image_lab)
             if simclr_criterion is not None:
                 # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, bs x 2 x dim
                 loss_ce = criterion(outputs[0], targets)
@@ -119,24 +186,40 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     loss = criterion(outputs, targets)
 
         loss_value = loss.item()
-
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             raise ValueError("Loss is {}, stopping training".format(loss_value))
+        
+        total_loss = loss + args.gamma * contrastive_loss + args.beta * group_contrastive_loss
+        # total_loss = loss + args.beta * group_contrastive_loss
 
-        optimizer.zero_grad()
+        
+        # measure accuracy and record loss
+        if epoch >= args.sup_thresh: 
+            total_losses.update(total_loss.item(), samples.size(0)+ args.mu*samples.size(0))
+        else:
+            total_losses.update(total_loss.item(), samples.size(0))
+
+        supervised_losses.update(loss.item(), samples.size(0))
+        contrastive_losses.update(contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
+        group_contrastive_losses.update(group_contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
+ 
+
+       
 
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
 
         if amp:
-            loss_scaler(loss, optimizer, clip_grad=max_norm,
+            loss_scaler(total_loss, optimizer, clip_grad=max_norm,
                         parameters=model.parameters(), create_graph=is_second_order)
         else:
-            loss.backward(create_graph=is_second_order)
+            total_loss.backward(create_graph=is_second_order)
+
             if max_norm is not None and max_norm != 0.0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             optimizer.step()
+        optimizer.zero_grad()
 
         torch.cuda.synchronize()
         if model_ema is not None:
@@ -160,8 +243,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         elif isinstance(criterion, (DeepMutualLoss, ONELoss)):
             metric_logger.update(loss_ce=loss_ce.item())
             metric_logger.update(loss_kd=loss_kd.item())
-        metric_logger.update(loss=loss_value)
+        
+        metric_logger.update(loss=total_losses.avg)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        metric_logger.update(instance_constrastive_loss=contrastive_losses.avg)
+        metric_logger.update(group_constrastive_loss=group_contrastive_losses.avg)
+        metric_logger.update(supervised_loss=supervised_losses.avg)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
@@ -249,148 +336,145 @@ def concat_all_gather(tensor):
     return output
 
 
-def train_ssl(labeled_trainloader, unlabeled_trainloader, model, criterion, optimizer, epoch, mixup_fn, args):
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    total_losses = AverageMeter()
-    supervised_losses = AverageMeter()
-    contrastive_losses = AverageMeter()
-    group_contrastive_losses = AverageMeter()
-    pl_losses = AverageMeter()
-    top1 = AverageMeter()
-    top5 = AverageMeter()
+# def train_ssl(labeled_trainloader, unlabeled_trainloader, model, criterion, optimizer, epoch, mixup_fn, args):
+#     batch_time = AverageMeter()
+#     data_time = AverageMeter()
+#     total_losses = AverageMeter()
+#     supervised_losses = AverageMeter()
+#     contrastive_losses = AverageMeter()
+#     group_contrastive_losses = AverageMeter()
+#     pl_losses = AverageMeter()
+#     top1 = AverageMeter()
+#     top5 = AverageMeter()
 
-    model = model.cuda()
+#     model = model.cuda()
 
    
-    # switch to train mode
-    model.train()
-    lenn = max(len(labeled_trainloader), len(unlabeled_trainloader))
-    if epoch >= args.sup_thresh:
-        data_loader = zip(cycle(labeled_trainloader), unlabeled_trainloader)
-    else:
-        data_loader = labeled_trainloader
+#     # switch to train mode
+#     model.train()
+#     lenn = max(len(labeled_trainloader), len(unlabeled_trainloader))
+#     if epoch >= args.sup_thresh:
+#         data_loader = zip(cycle(labeled_trainloader), unlabeled_trainloader)
+#     else:
+#         data_loader = labeled_trainloader
 
-    end = time.time()
+#     end = time.time()
 
 
-    metric_logger = MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('instance_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('group_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 50
+#     metric_logger = MetricLogger(delimiter="  ")
+#     metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+#     metric_logger.add_meter('instance_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+#     metric_logger.add_meter('group_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+#     metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+#     header = 'Epoch: [{}]'.format(epoch)
+#     print_freq = 50
 
-    for data in metric_logger.log_every(data_loader, print_freq, lenn if epoch >= args.sup_thresh else len(labeled_trainloader), header):
-        # measure data loading time
-        data_time.update(time.time() - end)
+#     for data in metric_logger.log_every(data_loader, print_freq, lenn if epoch >= args.sup_thresh else len(labeled_trainloader), header):
+#         # measure data loading time
+#         data_time.update(time.time() - end)
         
-        #reseting losses
+#         #reseting losses
 
-        loss = torch.tensor(0.0).cuda()
-        contrastive_loss = torch.tensor(0.0).cuda()
-        group_contrastive_loss = torch.tensor(0.0).cuda()
+#         loss = torch.tensor(0.0).cuda()
+#         contrastive_loss = torch.tensor(0.0).cuda()
+#         group_contrastive_loss = torch.tensor(0.0).cuda()
 
-        if epoch >= args.sup_thresh:
-            (labeled_data,unlabeled_data) = data
-            images_8f, _ = unlabeled_data
-            images_8f = images_8f.cuda()
-            images_8f = torch.autograd.Variable(images_8f)
+#         if epoch >= args.sup_thresh:
+#             (labeled_data,unlabeled_data) = data
+#             images_8f, _ = unlabeled_data
+#             images_8f = images_8f.cuda()
+#             images_8f = torch.autograd.Variable(images_8f)
 
 
-            super_image_3x3, super_image_2x2 = create_super_image(images_8f, isLabeled=False)
-
-            # save_super_image(super_image_3x3, "super_image_3x3.jpg")
-            # save_super_image(super_image_2x2, "super_image_2x2.jpg")
-
-            # print(super_image_3x3.shape, super_image_2x2.shape)
+#             super_image_3x3, super_image_2x2 = create_super_image(images_8f, isLabeled=False)
             
-            output_8f = model(super_image_3x3)
-            output_4f = model(super_image_2x2)
+#             save_super_image(super_image_3x3, "super_image_3x3new.jpg")
+#             save_super_image(super_image_2x2, "super_image_2x2new.jpg")
 
-            output_8f_detach = output_8f.detach()
-            contrastive_loss = simclr_loss(torch.softmax(output_8f_detach,dim=1),torch.softmax(output_4f,dim=1), args)
+#             # print(super_image_3x3.shape, super_image_2x2.shape)
+            
+#             output_8f = model(super_image_3x3)
+#             output_4f = model(super_image_2x2)
+
+#             output_8f_detach = output_8f.detach()
+#             contrastive_loss = simclr_loss(torch.softmax(output_8f_detach,dim=1),torch.softmax(output_4f,dim=1), args)
     
-            grp_unlabeled_8seg = get_group(output_8f_detach)
-            grp_unlabeled_4seg = get_group(output_4f)
-            group_contrastive_loss = compute_group_contrastive_loss(grp_unlabeled_8seg,grp_unlabeled_4seg, args)         
-        else:
-            labeled_data = data
+#             grp_unlabeled_8seg = get_group(output_8f_detach)
+#             grp_unlabeled_4seg = get_group(output_4f)
+#             group_contrastive_loss = compute_group_contrastive_loss(grp_unlabeled_8seg,grp_unlabeled_4seg, args)         
+#         else:
+#             labeled_data = data
         
        
-        input, target_original = labeled_data
-        if args.mixup > 0:
-            input, target = mixup_fn(input, target_original)
-        else:
-            target = F.one_hot(target_original, num_classes=args.num_classes)
-        
-        target = target.cuda()
-        input = input.cuda()
-        
-        input = torch.autograd.Variable(input)
-        target_var = torch.autograd.Variable(target)
-        
-        super_image_lab = create_super_image(input, isLabeled=True)
-        # save_super_image(super_image_lab, "super_image_lab.jpg")
-        
-        output = model(super_image_lab)
+#         input, target_original = labeled_data
+#         input, target = mixup_fn(input, target_original)
 
-        print("target shape: ", target_var.shape, output.shape)
-        loss = criterion(output, target_var)
-
-        total_loss = loss + args.gamma * contrastive_loss  + args.beta * group_contrastive_loss
-
-        # measure accuracy and record loss
+#         target = target.cuda()
+#         input = input.cuda()
         
-        prec1, prec5 = accuracy(output, target_original.cuda(), topk=(1, 5))
+#         input = torch.autograd.Variable(input)
+#         target_var = torch.autograd.Variable(target)
         
-        total_losses.update(total_loss.item(), input.size(0)+ args.mu*input.size(0))
+#         super_image_lab = create_super_image(input, isLabeled=True)
+
+#         # save_super_image(super_image_lab, "super_image_lab.jpg")
+#         output = model(super_image_lab)
+
+#         # print("target shape: ", target_var.shape, output.shape)
+#         loss = criterion(output, target_var)
+
+#         total_loss = loss + args.gamma * contrastive_loss  + args.beta * group_contrastive_loss
+
+#         # measure accuracy and record loss
         
-        supervised_losses.update(loss.item(), input.size(0))
-        contrastive_losses.update(contrastive_loss.item(), input.size(0)+args.mu*input.size(0))
-        group_contrastive_losses.update(group_contrastive_loss.item(), input.size(0)+args.mu*input.size(0))
+#         prec1, prec5 = accuracy(output, target_original.cuda(), topk=(1, 5))
         
-        top1.update(prec1.item(), input.size(0))
-        top5.update(prec5.item(), input.size(0))
+#         total_losses.update(total_loss.item(), input.size(0)+ args.mu*input.size(0))
+        
+#         supervised_losses.update(loss.item(), input.size(0))
+#         contrastive_losses.update(contrastive_loss.item(), input.size(0)+args.mu*input.size(0))
+#         group_contrastive_losses.update(group_contrastive_loss.item(), input.size(0)+args.mu*input.size(0))
+        
+#         top1.update(prec1.item(), input.size(0))
+#         top5.update(prec5.item(), input.size(0))
 
-        # compute gradient and do SGD step
-        total_loss.backward()
+#         # compute gradient and do SGD step
+#         total_loss.backward()
 
-        optimizer.step()
-        optimizer.zero_grad()
+#         optimizer.step()
+#         optimizer.zero_grad()
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+#         # measure elapsed time
+#         batch_time.update(time.time() - end)
+#         end = time.time()
 
-        # if i % 100 == 0:
-        #     output = ('Epoch: [{0}][{1}], lr: {lr:.5f}\t'
-        #               'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-        #               'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-        #               'TotalLoss {total_loss.val:.4f} ({total_loss.avg:.4f})\t'
-        #               'Supervised Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-        #               'Contrastive_Loss {contrastive_loss.val:.4f} ({contrastive_loss.avg:.4f})\t'
-        #               'Group_contrastive_Loss {group_contrastive_loss.val:.4f} ({group_contrastive_loss.avg:.4f})\t'
-        #               'Pseudo_Loss {pl_loss.val:.4f} ({pl_loss.avg:.4f})\t'
-        #               'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-        #               'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-        #                   epoch, i, batch_time=batch_time,
-        #                   data_time=data_time, total_loss=total_losses,loss=supervised_losses,
-        #                   contrastive_loss=contrastive_losses,group_contrastive_loss=group_contrastive_losses,pl_loss=pl_losses, top1=top1, top5=top5, lr=optimizer.param_groups[-1]['lr'] * 0.1))  # TODO
-        #     print(output)
+#         # if i % 100 == 0:
+#         #     output = ('Epoch: [{0}][{1}], lr: {lr:.5f}\t'
+#         #               'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+#         #               'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+#         #               'TotalLoss {total_loss.val:.4f} ({total_loss.avg:.4f})\t'
+#         #               'Supervised Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+#         #               'Contrastive_Loss {contrastive_loss.val:.4f} ({contrastive_loss.avg:.4f})\t'
+#         #               'Group_contrastive_Loss {group_contrastive_loss.val:.4f} ({group_contrastive_loss.avg:.4f})\t'
+#         #               'Pseudo_Loss {pl_loss.val:.4f} ({pl_loss.avg:.4f})\t'
+#         #               'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+#         #               'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+#         #                   epoch, i, batch_time=batch_time,
+#         #                   data_time=data_time, total_loss=total_losses,loss=supervised_losses,
+#         #                   contrastive_loss=contrastive_losses,group_contrastive_loss=group_contrastive_losses,pl_loss=pl_losses, top1=top1, top5=top5, lr=optimizer.param_groups[-1]['lr'] * 0.1))  # TODO
+#         #     print(output)
             
-        metric_logger.update(loss=total_losses.avg)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        metric_logger.update(instance_constrastive_loss=contrastive_losses.avg)
-        metric_logger.update(group_constrastive_loss=group_contrastive_losses.avg)
-        metric_logger.update(supervised_loss=supervised_losses.avg)
+#         metric_logger.update(loss=total_losses.avg)
+#         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+#         metric_logger.update(instance_constrastive_loss=contrastive_losses.avg)
+#         metric_logger.update(group_constrastive_loss=group_contrastive_losses.avg)
+#         metric_logger.update(supervised_loss=supervised_losses.avg)
 
 
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+#     # gather the stats from all processes
+#     metric_logger.synchronize_between_processes()
+#     print("Averaged stats:", metric_logger)
+#     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 
@@ -407,37 +491,40 @@ def get_group(output):
 
 
 def compute_group_contrastive_loss(grp_dict_un,grp_dict_lab, args):
-    loss = []
-    l_fast =[]
-    l_slow =[]
+    
+    l_fast_list =[]
+    l_slow_list =[]
     for key in grp_dict_un.keys():
         if key in grp_dict_lab:
-            l_fast.append(torch.stack(grp_dict_un[key]).mean(dim=0))
-            l_slow.append(torch.stack(grp_dict_lab[key]).mean(dim=0))
-    if len(l_fast) > 0:
-        l_fast = torch.stack(l_fast)
-        l_slow = torch.stack(l_slow)
+            l_fast_list.append(torch.stack(grp_dict_un[key]).mean(dim=0))
+            l_slow_list.append(torch.stack(grp_dict_lab[key]).mean(dim=0))
+    if len(l_fast_list) > 0:
+        l_fast = torch.stack(l_fast_list)
+        l_slow = torch.stack(l_slow_list)
+        # loss = torch.tensor((1.00)).cuda()
         loss = simclr_loss(l_fast,l_slow, args)
         loss = max(torch.tensor(0.000).cuda(),loss)
     else:
         loss= torch.tensor(0.0).cuda()
+    # loss.requires_grad = True
     return loss
 
 
 def simclr_loss(output_fast,output_slow, args,normalize=True):
+    
     out = torch.cat((output_fast, output_slow), dim=0)
     sim_mat = torch.mm(out, torch.transpose(out,0,1))
     if normalize:
         sim_mat_denom = torch.mm(torch.norm(out, dim=1).unsqueeze(1), torch.norm(out, dim=1).unsqueeze(1).t())
         sim_mat = sim_mat / sim_mat_denom.clamp(min=1e-16)
-    sim_mat = torch.exp(sim_mat / args.Temperature)
+    sim_mat = torch.exp(sim_mat / args.temperature)
     if normalize:
         sim_mat_denom = torch.norm(output_fast, dim=1) * torch.norm(output_slow, dim=1)
-        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / sim_mat_denom / args.Temperature)
+        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / sim_mat_denom / args.temperature)
     else:
-        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / args.Temperature)
+        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / args.temperature)
     sim_match = torch.cat((sim_match, sim_match), dim=0)
-    norm_sum = torch.exp(torch.ones(out.size(0)) / args.Temperature )
+    norm_sum = torch.exp(torch.ones(out.size(0)) / args.temperature )
     norm_sum = norm_sum.cuda()
     loss = torch.mean(-torch.log(sim_match / (torch.sum(sim_mat, dim=-1) - norm_sum)))
     return loss

@@ -63,6 +63,7 @@ def get_augmentor(is_train: bool, image_size: int, mean: List[float] = None,
 
 def build_dataflow(dataset, is_train, batch_size, workers=36, is_distributed=False):
     workers = min(workers, multiprocessing.cpu_count())
+    print("workers", workers, multiprocessing.cpu_count())
     shuffle = False
 
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if is_distributed else None

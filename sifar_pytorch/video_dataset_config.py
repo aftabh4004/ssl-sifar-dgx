@@ -95,7 +95,9 @@ DATASET_CONFIG = {
         'val_list_name': 'test.txt',
         'filename_seperator': " ",
         'image_tmpl': '{:05d}.jpg',
-        'filter_video': 0
+        'filter_video': 0,
+        'train_label_list_name': 'labeled_training.txt',
+        'train_unlabel_list_name': 'unlabeled_training.txt'
     },
     'hmdb51': {
         'num_classes': 51,
@@ -130,6 +132,9 @@ def get_dataset_config(dataset, use_lmdb=False):
     image_tmpl = ret['image_tmpl']
     filter_video = ret.get('filter_video', 0)
     label_file = ret.get('label_file', None)
+    train_label_list_name = ret.get('train_label_list_name', None)
+    train_unlabel_list_name = ret.get('train_unlabel_list_name', None)
 
-    return num_classes, train_list_name, val_list_name, test_list_name, filename_seperator, \
-           image_tmpl, filter_video, label_file
+
+    return num_classes, train_list_name, val_list_name, filename_seperator, \
+           image_tmpl, filter_video, train_label_list_name, train_unlabel_list_name

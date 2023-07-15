@@ -65,7 +65,7 @@ def main():
     print("==============model desccription=============")
     print(model)
     crop_size = model.crop_size
-    scale_size = model.scale_size
+    scale_size = model.scale_size/scratch/datasets/UCF-101/Videos/Surfing/v_Surfing_g02_c06.avi
     input_mean = model.input_mean
     input_std = model.input_std
     policies = model.get_optim_policies()

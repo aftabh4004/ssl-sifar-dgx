@@ -24,7 +24,7 @@ from timm.optim import create_optimizer
 from timm.utils import NativeScaler, get_state_dict, ModelEma
 
 #from datasets import build_dataset
-from sifar_pytorch.engine import train_one_epoch, evaluate, train_ssl
+from sifar_pytorch.engine import train_one_epoch, evaluate
 from sifar_pytorch.samplers import RASampler
 from sifar_pytorch import models
 from sifar_pytorch import my_models
@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
     parser.add_argument('--batch-size', default=64, type=int)
-    parser.add_argument('--epochs', default=300, type=int)
+    parser.add_argument('--epochs', default=150, type=int)
 
     # Dataset parameters
     parser.add_argument('--data_dir', type=str, metavar='DIR', help='path to dataset')
@@ -214,7 +214,7 @@ def get_args_parser():
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
-    parser.add_argument('--num_workers', default=10, type=int)
+    parser.add_argument('--num_workers', default=20, type=int)
     parser.add_argument('--pin-mem', action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
     parser.add_argument('--no-pin-mem', action='store_false', dest='pin_mem',
@@ -262,8 +262,9 @@ def get_args_parser():
     parser.add_argument('--beta', type=float, default=1.0, help='group constractive loss factor')
 
     #used in simclr 
-    parser.add_argument('--Temperature', type=float, default=0.5, help='temperatue for sharping')
-    parser.add_argument('--sup_thresh', type=int, default=1, help='Supervise threshold')
+    parser.add_argument('--sup_thresh', type=int, default=25, help='Supervise threshold')
+
+    parser.add_argument('--list_root', type=str, default="/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list", help='Path of the train val list')
 
     return parser
 
@@ -290,7 +291,7 @@ def main(args):
 
     cudnn.benchmark = True
 
-    num_classes, train_list_name, val_list_name, test_list_name, filename_seperator, image_tmpl, filter_video, label_file = get_dataset_config(
+    num_classes, train_list_name, val_list_name, filename_seperator, image_tmpl, filter_video, train_label_list_name, train_unlabel_list_name = get_dataset_config(
         args.dataset, args.use_lmdb)
 
     args.num_classes = num_classes
@@ -345,7 +346,8 @@ def main(args):
     model_without_ddp = model
     if args.distributed:
         #model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model = torch.nn.DataParallel(model, device_ids=[args.gpu]).cuda()
         model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
@@ -437,10 +439,13 @@ def main(args):
     
     ## Datasets and Dataloaders
 
-    train_list = os.path.join(args.data_dir, train_list_name)
-    train_label_list, train_unlabel_list = get_training_filenames(args.data_dir, train_list, args.percentage, args.strategy)
+    train_list = os.path.join(args.list_root, train_list_name)
+    train_label_list = os.path.join(args.list_root, train_label_list_name)
+    train_unlabel_list = os.path.join(args.list_root, train_unlabel_list_name)
+    
+    # train_label_list, train_unlabel_list = get_training_filenames(args.list_root, train_list, args.percentage, args.strategy)
 
-    validate_split(train_label_list, train_unlabel_list)
+    # validate_split(train_label_list, train_unlabel_list)
 
 
     train_augmentor = get_augmentor(True, args.input_size, mean, std, threed_data=args.threed_data,
@@ -460,13 +465,13 @@ def main(args):
                                     seperator=filename_seperator, filter_video=filter_video)
 
     num_tasks = utils.get_world_size()
-    data_loader_labeled_train = build_dataflow(dataset_labeled_train, is_train=True, batch_size=args.batch_size,
+    labeled_trainloader = build_dataflow(dataset_labeled_train, is_train=True, batch_size=args.batch_size,
                                        workers=args.num_workers, is_distributed=args.distributed)
 
-    data_loader_unlabeled_train = build_dataflow(dataset_unlabeled_train, is_train=True, batch_size=args.batch_size * args.mu,
+    unlabeled_trainloader = build_dataflow(dataset_unlabeled_train, is_train=True, batch_size=args.batch_size * args.mu,
                                        workers=args.num_workers, is_distributed=args.distributed)
 
-    val_list = os.path.join(args.data_dir, val_list_name)
+    val_list = os.path.join(args.list_root, val_list_name)
     val_augmentor = get_augmentor(False, args.input_size, mean, std, args.disable_scaleup,
                                   threed_data=args.threed_data, version=args.augmentor_ver,
                                   scale_range=args.scale_range, num_clips=args.num_clips, num_crops=args.num_crops, dataset=args.dataset)
@@ -497,24 +502,25 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
 
         if args.distributed:
-            data_loader_labeled_train.sampler.set_epoch(epoch)
-            data_loader_unlabeled_train.sampler.set_epoch(epoch)
+            labeled_trainloader.sampler.set_epoch(epoch)
+            unlabeled_trainloader.sampler.set_epoch(epoch)
        
-        # train_stats = train_one_epoch(
-        #     model, criterion, data_loader_labeled_train,
-        #     optimizer, device, epoch, loss_scaler,
-        #     args.clip_grad, model_ema, mixup_fn, num_tasks, True,
-        #     amp=args.amp,
-        #     simclr_criterion=simclr_criterion, simclr_w=args.simclr_w,
-        #     branch_div_criterion=branch_div_criterion, branch_div_w=args.branch_div_w,
-        #     simsiam_criterion=simsiam_criterion, simsiam_w=args.simsiam_w,
-        #     moco_criterion=moco_criterion, moco_w=args.moco_w,
-        #     byol_criterion=byol_criterion, byol_w=args.byol_w,
-        #     contrastive_nomixup=args.contrastive_nomixup,
-        #     hard_contrastive=args.hard_contrastive,
-        #     finetune=args.finetune
-        # )
-        train_stats = train_ssl(data_loader_labeled_train, data_loader_unlabeled_train, model, criterion, optimizer, epoch, mixup_fn, args)
+        train_stats = train_one_epoch(
+            model, criterion, labeled_trainloader, unlabeled_trainloader,
+            optimizer, device, epoch, loss_scaler,
+            args.clip_grad, model_ema, mixup_fn, num_tasks, True,
+            args = args,
+            amp=args.amp,
+            simclr_criterion=simclr_criterion, simclr_w=args.simclr_w,
+            branch_div_criterion=branch_div_criterion, branch_div_w=args.branch_div_w,
+            simsiam_criterion=simsiam_criterion, simsiam_w=args.simsiam_w,
+            moco_criterion=moco_criterion, moco_w=args.moco_w,
+            byol_criterion=byol_criterion, byol_w=args.byol_w,
+            contrastive_nomixup=args.contrastive_nomixup,
+            hard_contrastive=args.hard_contrastive,
+            finetune=args.finetune
+        )
+        # train_stats = train_ssl(labeled_trainloader, unlabeled_trainloader, model, criterion, optimizer, epoch, mixup_fn, args)
 
         lr_scheduler.step(epoch)
 

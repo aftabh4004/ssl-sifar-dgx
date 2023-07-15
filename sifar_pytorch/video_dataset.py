@@ -413,8 +413,10 @@ class VideoDataSet(data.Dataset):
         # or [video_id, start_frame, end_frame, list of class_idx]
         tmp = []
         original_video_numbers = 0
+        print("list file ", self.list_file)
         for x in open(self.list_file):
             elements = x.strip().split(self.separator)
+            # print(elements)
             start_frame = int(elements[1])
             end_frame = int(elements[2])
             total_frame = end_frame - start_frame + 1
@@ -429,6 +431,8 @@ class VideoDataSet(data.Dataset):
         print("The number of videos is {} (with more than {} frames) "
               "(original: {})".format(num, self.filter_video, original_video_numbers), flush=True)
         assert (num > 0)
+        # if num <= 0:
+        #     print()
         # TODO: a better way to check if multi-label or not
         multi_label = np.mean(np.asarray([len(x) for x in tmp])) > 4.0
         file_list = []
@@ -977,9 +981,12 @@ class VideoDataSetOnline(VideoDataSet):
         container.streams.video[0].thread_type = "AUTO"
         frames_length = container.streams.video[0].frames
         duration = container.streams.video[0].duration
+
+    
         if duration is None or frames_length == 0:
             # If failed to fetch the decoding information, decode the entire video.
             # video_start_pts, video_end_pts = 0, math.inf
+            print("get true at 1")
             decode_all = True
         else:
             # Perform selective decoding.
@@ -1022,6 +1029,8 @@ class VideoDataSetOnline(VideoDataSet):
                 else:
                     video_frames = video_frames[index, ...]
             except Exception as e:
+                print("exception in selective decoding")
+                print(e)
                 success = False
 
             return video_frames, success
@@ -1036,6 +1045,7 @@ class VideoDataSetOnline(VideoDataSet):
                 curr_index = indices[(i) * self.num_frames: (i + 1) * self.num_frames]
                 curr_video_frames, success = _selective_decoding(container, curr_index, timebase)
                 if not success:
+                    print("get true at 2")
                     decode_all = True
                     break
                 if video_frames is not None:
@@ -1045,6 +1055,9 @@ class VideoDataSetOnline(VideoDataSet):
         if decode_all:
             container.seek(0, any_frame=False, backward=True, stream=container.streams.video[0])
             frames = {}
+
+            print("reached here", flush=True)
+            print(os.path.join(self.root_path, record.path))
             for frame in container.decode({'video': 0}):
                 frames[frame.pts] = frame
             video_frames = np.asarray([frames[pts].to_rgb().to_ndarray() for pts in sorted(frames)])
