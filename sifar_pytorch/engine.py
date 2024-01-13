@@ -13,7 +13,7 @@ import time
 import shutil
 import random
 import datetime
-
+import numpy as np
 import math
 import sys
 from typing import Iterable, Optional
@@ -105,8 +105,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     metric_logger = MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('instance_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('group_constrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('instance_contrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('group_contrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 50
@@ -125,22 +125,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             targets = targets.cuda()
             samples_u, _ = process_samples_target(samples_u, targets)
 
+            # print("sample target ", samples_u.shape, targets.shape)
             super_image_3x3, super_image_2x2 = create_super_image(samples_u, isLabeled=False)
             
-            # save_super_image(super_image_3x3, "super_image_3x3new.jpg")
-            # save_super_image(super_image_2x2, "super_image_2x2new.jpg")
+            # save_super_image(super_image_3x3, "super_image_3x3_128.jpg")
+            # save_super_image(super_image_2x2, "super_image_2x2_192.jpg")
 
             # print(super_image_3x3.shape, super_image_2x2.shape)
-            
-            output_8f = model(super_image_3x3)
-            output_4f = model(super_image_2x2)
-
-            output_8f_detach = output_8f.detach()
-            contrastive_loss = simclr_loss(torch.softmax(output_8f_detach,dim=1),torch.softmax(output_4f,dim=1), args)
-    
-            grp_unlabeled_8seg = get_group(output_8f_detach)
-            grp_unlabeled_4seg = get_group(output_4f)
-            group_contrastive_loss = compute_group_contrastive_loss(grp_unlabeled_8seg,grp_unlabeled_4seg, args) 
         else:
             labeled_data = data
 
@@ -150,10 +141,47 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         targets = targets.cuda()
 
         samples, targets = process_samples_target(samples, targets)
+        # print("sample lab", samples.shape, targets.shape)
         super_image_lab = create_super_image(samples, isLabeled=True)
 
-        with torch.cuda.amp.autocast(enabled=amp):
+        with torch.cuda.amp.autocast(enabled=amp): #, dtype=torch.float16):
             outputs = model(super_image_lab)
+            if epoch >= args.sup_thresh:
+                assert not torch.isnan(super_image_3x3).any()
+                assert not torch.isnan(super_image_2x2).any()
+                output_8f = model(super_image_3x3)
+                output_4f = model(super_image_2x2)
+
+                output_8f_detach = output_8f.detach()
+                contrastive_loss = simclr_loss(torch.softmax(output_8f_detach,dim=1),torch.softmax(output_4f,dim=1), args)
+                grp_unlabeled_8seg = get_group(output_8f_detach)
+                grp_unlabeled_4seg = get_group(output_4f)
+                group_contrastive_loss = compute_group_contrastive_loss(grp_unlabeled_8seg,grp_unlabeled_4seg, args)
+                
+                if np.isnan(contrastive_loss.item()):
+                    import ipdb;ipdb.set_trace()
+                if torch.isnan(output_8f).any():
+                    print("output8f got NaN", flush=True)
+                   
+                elif torch.isnan(output_4f).any():
+                    print("output4f got NaN", flush=True)
+                   
+                elif torch.isnan(output_8f_detach).any():
+                    print("output8f detach got NaN", flush=True)
+
+                elif torch.isnan(output_8f).any():
+                    print("output8f detach got NaN", flush=True)
+                      
+                elif torch.isnan(contrastive_loss).any():
+                    print("contrastive_loss got NaN", flush=True)
+                   
+                elif torch.isnan(group_contrastive_loss).any():
+                    print("group_contrastive_loss got NaN", flush=True)
+                    
+
+                 
+                assert not np.isnan(contrastive_loss.item())  
+
             if simclr_criterion is not None:
                 # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, bs x 2 x dim
                 loss_ce = criterion(outputs[0], targets)
@@ -196,7 +224,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         
         # measure accuracy and record loss
         if epoch >= args.sup_thresh: 
-            total_losses.update(total_loss.item(), samples.size(0)+ args.mu*samples.size(0))
+            total_losses.update(total_loss.item(), samples.size(0)+ args.mu*samples.size(0) )
         else:
             total_losses.update(total_loss.item(), samples.size(0))
 
@@ -204,8 +232,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         contrastive_losses.update(contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
         group_contrastive_losses.update(group_contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
  
-
-       
+        # supervised_losses.update(loss.item(), samples.size(0))
+        # contrastive_losses.update(contrastive_loss.item(), args.mu*samples.size(0))
+        # group_contrastive_losses.update(group_contrastive_loss.item(), args.mu*samples.size(0))
+        
 
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
@@ -246,8 +276,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         
         metric_logger.update(loss=total_losses.avg)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        metric_logger.update(instance_constrastive_loss=contrastive_losses.avg)
-        metric_logger.update(group_constrastive_loss=group_contrastive_losses.avg)
+        metric_logger.update(instance_contrastive_loss=contrastive_losses.avg)
+        metric_logger.update(group_contrastive_loss=group_contrastive_losses.avg)
         metric_logger.update(supervised_loss=supervised_losses.avg)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -268,15 +298,14 @@ def evaluate(data_loader, model, device, world_size, args, distributed=True, amp
     outputs = []
     targets = []
 
-    for images, target in metric_logger.log_every(data_loader, 10, len(data_loader), header):
+    for images, target in metric_logger.log_every(data_loader, 100, len(data_loader), header):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
         # compute output
         batch_size = images.shape[0]
         #images = images.view((batch_size * num_crops * num_clips, -1) + images.size()[2:])
-        with torch.cuda.amp.autocast(enabled=amp):
+        with torch.cuda.amp.autocast(enabled=amp, dtype=torch.float16):
             super_image_val = create_super_image(images, isLabeled=True)
-            
             output = model(super_image_val)
             #loss = criterion(output, target)
         output = output.reshape(batch_size, num_crops * num_clips, -1).mean(dim=1)
@@ -305,7 +334,7 @@ def evaluate(data_loader, model, device, world_size, args, distributed=True, amp
         tmp = outputs[:num_data].cpu().numpy()
         tt = targets[:num_data].cpu().numpy()
         np.savez("con_mix.npz", pred=tmp, gt=tt)
-        
+
     real_acc1, real_acc5 = accuracy(outputs[:num_data], targets[:num_data], topk=(1, 5))
     real_loss = criterion(outputs, targets)
     metric_logger.update(loss=real_loss.item())
@@ -334,6 +363,64 @@ def concat_all_gather(tensor):
         output = rearrange(tensors_gather, 'n b c -> (b n) c')
 
     return output
+
+
+
+
+
+def get_group(output):
+    logits = torch.softmax(output, dim=-1)
+    _ , target = torch.max(logits, dim=-1)
+    groups ={}
+    for x,y in zip(target, logits):
+        group = groups.get(x.item(),[])
+        group.append(y)
+        groups[x.item()]= group
+    
+    return groups
+
+
+
+def compute_group_contrastive_loss(grp_dict_un,grp_dict_lab, args):
+    
+    l_fast_list =[]
+    l_slow_list =[]
+    for key in grp_dict_un.keys():
+        if key in grp_dict_lab:
+            l_fast_list.append(torch.stack(grp_dict_un[key]).mean(dim=0))
+            l_slow_list.append(torch.stack(grp_dict_lab[key]).mean(dim=0))
+    if len(l_fast_list) > 0:
+        l_fast = torch.stack(l_fast_list)
+        l_slow = torch.stack(l_slow_list)
+        # print("Group loss")
+        loss = simclr_loss(l_fast,l_slow, args)
+        loss = max(torch.tensor(0.000).cuda(),loss)
+    else:
+        loss= torch.tensor(0.0).cuda()
+    return loss
+
+
+def simclr_loss(output_fast,output_slow, args,normalize=True):
+    out = torch.cat((output_fast, output_slow), dim=0)
+    sim_mat = torch.mm(out, torch.transpose(out,0,1))
+    if normalize:
+        sim_mat_denom = torch.mm(torch.norm(out, dim=1).unsqueeze(1), torch.norm(out, dim=1).unsqueeze(1).t())
+        sim_mat = sim_mat / sim_mat_denom.clamp(min=1e-16)
+    sim_mat = torch.exp(sim_mat / args.temperature)
+    if normalize:
+        sim_mat_denom = torch.norm(output_fast, dim=1) * torch.norm(output_slow, dim=1)
+        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / sim_mat_denom / args.temperature)
+    else:
+        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / args.temperature)
+    sim_match = torch.cat((sim_match, sim_match), dim=0)
+    norm_sum = torch.exp(torch.ones(out.size(0)) / args.temperature )
+    norm_sum = norm_sum.cuda()
+    loss = torch.mean(-torch.log(sim_match / torch.abs(torch.sum(sim_mat, dim=-1) - norm_sum)))
+  
+    
+    return loss
+
+
 
 
 # def train_ssl(labeled_trainloader, unlabeled_trainloader, model, criterion, optimizer, epoch, mixup_fn, args):
@@ -475,56 +562,3 @@ def concat_all_gather(tensor):
 #     metric_logger.synchronize_between_processes()
 #     print("Averaged stats:", metric_logger)
 #     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
-
-
-def get_group(output):
-    logits = torch.softmax(output, dim=-1)
-    _ , target = torch.max(logits, dim=-1)
-    groups ={}
-    for x,y in zip(target, logits):
-        group = groups.get(x.item(),[])
-        group.append(y)
-        groups[x.item()]= group
-    return groups
-
-
-
-def compute_group_contrastive_loss(grp_dict_un,grp_dict_lab, args):
-    
-    l_fast_list =[]
-    l_slow_list =[]
-    for key in grp_dict_un.keys():
-        if key in grp_dict_lab:
-            l_fast_list.append(torch.stack(grp_dict_un[key]).mean(dim=0))
-            l_slow_list.append(torch.stack(grp_dict_lab[key]).mean(dim=0))
-    if len(l_fast_list) > 0:
-        l_fast = torch.stack(l_fast_list)
-        l_slow = torch.stack(l_slow_list)
-        # loss = torch.tensor((1.00)).cuda()
-        loss = simclr_loss(l_fast,l_slow, args)
-        loss = max(torch.tensor(0.000).cuda(),loss)
-    else:
-        loss= torch.tensor(0.0).cuda()
-    # loss.requires_grad = True
-    return loss
-
-
-def simclr_loss(output_fast,output_slow, args,normalize=True):
-    
-    out = torch.cat((output_fast, output_slow), dim=0)
-    sim_mat = torch.mm(out, torch.transpose(out,0,1))
-    if normalize:
-        sim_mat_denom = torch.mm(torch.norm(out, dim=1).unsqueeze(1), torch.norm(out, dim=1).unsqueeze(1).t())
-        sim_mat = sim_mat / sim_mat_denom.clamp(min=1e-16)
-    sim_mat = torch.exp(sim_mat / args.temperature)
-    if normalize:
-        sim_mat_denom = torch.norm(output_fast, dim=1) * torch.norm(output_slow, dim=1)
-        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / sim_mat_denom / args.temperature)
-    else:
-        sim_match = torch.exp(torch.sum(output_fast * output_slow, dim=-1) / args.temperature)
-    sim_match = torch.cat((sim_match, sim_match), dim=0)
-    norm_sum = torch.exp(torch.ones(out.size(0)) / args.temperature )
-    norm_sum = norm_sum.cuda()
-    loss = torch.mean(-torch.log(sim_match / (torch.sum(sim_mat, dim=-1) - norm_sum)))
-    return loss

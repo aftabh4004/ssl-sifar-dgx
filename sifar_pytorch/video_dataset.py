@@ -58,7 +58,7 @@ def compute_img_diff(image_1, image_2, bound=255.0):
     return image_diff
 
 
-def load_image(root_path, directory, image_tmpl, idx, modality):
+def load_image(directory, image_tmpl, idx, modality):
     """
 
     :param root_path:
@@ -91,7 +91,7 @@ def load_image(root_path, directory, image_tmpl, idx, modality):
     out = []
     if modality == 'rgb':
         for i in idx:
-            image_path_file = os.path.join(root_path, directory, image_tmpl.format(i))
+            image_path_file = os.path.join(directory, image_tmpl.format(i))
             out.append(_safe_load_image(image_path_file))
     elif modality == 'rgbdiff':
         tmp = {}
@@ -378,7 +378,7 @@ class VideoDataSet(data.Dataset):
             raise ValueError("modality should be 'flow' or 'rgb' or 'rgbdiff' or 'sound'.")
 
         self.root_path = root_path
-        self.list_file = os.path.join(root_path, list_file)
+        self.list_file = list_file #os.path.join(root_path, list_file)
         self.num_groups = num_groups
         self.num_frames = num_groups
         self.frames_per_group = frames_per_group
@@ -431,8 +431,7 @@ class VideoDataSet(data.Dataset):
         print("The number of videos is {} (with more than {} frames) "
               "(original: {})".format(num, self.filter_video, original_video_numbers), flush=True)
         assert (num > 0)
-        # if num <= 0:
-        #     print()
+       
         # TODO: a better way to check if multi-label or not
         multi_label = np.mean(np.asarray([len(x) for x in tmp])) > 4.0
         file_list = []
@@ -513,7 +512,7 @@ class VideoDataSet(data.Dataset):
             for seg_ind in indices:
                 new_seg_ind = [min(seg_ind + record.start_frame - 1 + i, record.num_frames)
                                for i in range(self.num_consecutive_frames)]
-                seg_imgs = load_image(self.root_path, record.path, self.image_tmpl,
+                seg_imgs = load_image(record.path, self.image_tmpl,
                                       new_seg_ind, self.modality)
                 images.extend(seg_imgs)
         return images
@@ -986,7 +985,7 @@ class VideoDataSetOnline(VideoDataSet):
         if duration is None or frames_length == 0:
             # If failed to fetch the decoding information, decode the entire video.
             # video_start_pts, video_end_pts = 0, math.inf
-            print("get true at 1")
+            # print("get true at 1")
             decode_all = True
         else:
             # Perform selective decoding.
@@ -1045,7 +1044,7 @@ class VideoDataSetOnline(VideoDataSet):
                 curr_index = indices[(i) * self.num_frames: (i + 1) * self.num_frames]
                 curr_video_frames, success = _selective_decoding(container, curr_index, timebase)
                 if not success:
-                    print("get true at 2")
+                    # print("get true at 2")
                     decode_all = True
                     break
                 if video_frames is not None:
@@ -1056,8 +1055,8 @@ class VideoDataSetOnline(VideoDataSet):
             container.seek(0, any_frame=False, backward=True, stream=container.streams.video[0])
             frames = {}
 
-            print("reached here", flush=True)
-            print(os.path.join(self.root_path, record.path))
+            # print("reached here", flush=True)
+            # print(os.path.join(self.root_path, record.path))
             for frame in container.decode({'video': 0}):
                 frames[frame.pts] = frame
             video_frames = np.asarray([frames[pts].to_rgb().to_ndarray() for pts in sorted(frames)])

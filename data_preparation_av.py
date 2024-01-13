@@ -72,18 +72,18 @@ def create_test_list(dataset_root, listpath, label_to_idx, list_dir):
             print("test.txt saved")
 
 def main():
-    dataset_root = '/scratch/datasets/UCF-101/Videos/'
+    # dataset_root = '/scratch/datasets/UCF-101/Videos/'
     list_dir = '/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/'
-    classind_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/classInd.txt"
-    trainlist_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/ucf101_train_split_1_videos.txt"
-    testlist_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/ucf101_val_split_1_videos.txt"
+    # classind_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/classInd.txt"
+    # trainlist_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/ucf101_train_split_1_videos.txt"
+    # testlist_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/ucf101_val_split_1_videos.txt"
 
-    label_to_idx = create_label_dict(classind_path)
-    print(label_to_idx)
-    train_list = create_train_val_list(dataset_root, trainlist_path, label_to_idx, list_dir)
-    create_test_list(dataset_root, testlist_path, label_to_idx, list_dir)
-
-    train_label_list, train_unlabel_list = get_training_filenames(list_dir, train_list, 0.95, 'classwise')
+    # label_to_idx = create_label_dict(classind_path)
+    # print(label_to_idx)
+    # train_list = create_train_val_list(dataset_root, trainlist_path, label_to_idx, list_dir)
+    # create_test_list(dataset_root, testlist_path, label_to_idx, list_dir)
+    train_list = '/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/train.txt'
+    train_label_list, train_unlabel_list = get_training_filenames(list_dir, train_list, 0.99, 'classwise')
 
     validate_split(train_label_list, train_unlabel_list)
 

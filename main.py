@@ -20,6 +20,7 @@ from timm.data import Mixup
 from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.scheduler import create_scheduler
+from timm.scheduler.cosine_lr import CosineLRScheduler
 from timm.optim import create_optimizer
 from timm.utils import NativeScaler, get_state_dict, ModelEma
 
@@ -38,11 +39,13 @@ from sifar_pytorch.video_dataset import VideoDataSet, VideoDataSetLMDB, VideoDat
 from sifar_pytorch.video_dataset_aug import get_augmentor, build_dataflow
 from sifar_pytorch.video_dataset_config import get_dataset_config, DATASET_CONFIG
 
-
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
 from ssl_sifar_utils import *
 
 warnings.filterwarnings("ignore", category=UserWarning)
 #torch.multiprocessing.set_start_method('spawn', force=True)
+
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
@@ -265,15 +268,20 @@ def get_args_parser():
     parser.add_argument('--sup_thresh', type=int, default=25, help='Supervise threshold')
 
     parser.add_argument('--list_root', type=str, default="/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list", help='Path of the train val list')
+    parser.add_argument('--lr_factor', type=float, default=0.1, help='factor multiply with the original lr after sup_thres')
 
+    parser.add_argument('--auto_resume', action='store_true', default=False,
+                    help='automatically resume from the output dir checkpoint')
     return parser
 
 
 def main(args):
-    # args.distributed = False
+    #args.distributed = False
     utils.init_distributed_mode(args)
-    print(args)
-    # Patch
+    args_dict = vars(args)
+
+    
+
     if not hasattr(args, 'hard_contrastive'):
         args.hard_contrastive = False
     if not hasattr(args, 'selfdis_w'):
@@ -314,6 +322,7 @@ def main(args):
     print(f"Creating model: {args.model}")
     model = create_model(
         args.model,
+        # img_size=args.input_size,
         pretrained=args.pretrained,
         duration=args.duration,
         hpe_to_token = args.hpe_to_token,
@@ -331,6 +340,7 @@ def main(args):
 
     # TODO: finetuning
 
+    # model= nn.DataParallel(model)
     model.to(device)
     print(model)
     # return
@@ -343,12 +353,14 @@ def main(args):
             device='cpu' if args.model_ema_force_cpu else '',
             resume='')
 
-    model_without_ddp = model
+    #model_without_ddp = model
     if args.distributed:
+        print("Using distributed training...")
         #model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model = torch.nn.DataParallel(model, device_ids=[args.gpu]).cuda()
-        model_without_ddp = model.module
+        #model_without_ddp = model.module
+
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
 
@@ -357,8 +369,12 @@ def main(args):
     optimizer = create_optimizer(args, model)
     loss_scaler = NativeScaler()
     #print(f"Scaled learning rate (batch size: {args.batch_size * utils.get_world_size()}): {linear_scaled_lr}")
-    lr_scheduler, _ = create_scheduler(args, optimizer)
+    
+    
+    # lr_sched_cosine = CosineLRScheduler(optimizer, t_initial=args.epochs, warmup_t= 0.1 * args.epochs, warmup_lr_init=1e-6)
+    lr_sched_cosine = CosineLRScheduler(optimizer, t_initial=args.epochs)
 
+    
     criterion = LabelSmoothingCrossEntropy()
 
     if args.mixup > 0.:
@@ -378,6 +394,7 @@ def main(args):
     elif args.selfdis_w > 0.:
         criterion = SelfDistillationLoss(criterion, args.selfdis_w, args.kd_temp)
 
+    # all are None as of now
     simclr_criterion = simclr.NTXent(temperature=args.temperature) if args.simclr_w > 0. else None
     branch_div_criterion = torch.nn.CosineSimilarity() if args.branch_div_w > 0. else None
     simsiam_criterion = simclr.SimSiamLoss() if args.simsiam_w > 0. else None
@@ -407,7 +424,7 @@ def main(args):
         utils.load_checkpoint(model, checkpoint['model'])
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+            lr_sched_cosine.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
             if 'scaler' in checkpoint and args.resume_loss_scaler:
                 print("Resume with previous loss scaler state")
@@ -443,10 +460,6 @@ def main(args):
     train_label_list = os.path.join(args.list_root, train_label_list_name)
     train_unlabel_list = os.path.join(args.list_root, train_unlabel_list_name)
     
-    # train_label_list, train_unlabel_list = get_training_filenames(args.list_root, train_list, args.percentage, args.strategy)
-
-    # validate_split(train_label_list, train_unlabel_list)
-
 
     train_augmentor = get_augmentor(True, args.input_size, mean, std, threed_data=args.threed_data,
                                     version=args.augmentor_ver, scale_range=args.scale_range, dataset=args.dataset)
@@ -468,7 +481,7 @@ def main(args):
     labeled_trainloader = build_dataflow(dataset_labeled_train, is_train=True, batch_size=args.batch_size,
                                        workers=args.num_workers, is_distributed=args.distributed)
 
-    unlabeled_trainloader = build_dataflow(dataset_unlabeled_train, is_train=True, batch_size=args.batch_size * args.mu,
+    unlabeled_trainloader = build_dataflow(dataset_unlabeled_train, is_train=True, batch_size=(args.batch_size * args.mu),
                                        workers=args.num_workers, is_distributed=args.distributed)
 
     val_list = os.path.join(args.list_root, val_list_name)
@@ -493,18 +506,23 @@ def main(args):
     # save_super_image_from_dataloader(data_loader_unlabeled_train, sample_si_root, "unlabeled.jpg", False, args.input_size, args.super_img_rows)
 
     if args.eval:
-        test_stats = evaluate(data_loader_val, model, device, num_tasks, distributed=args.distributed, amp=args.amp, num_crops=args.num_crops, num_clips=args.num_clips)
+        test_stats = evaluate(data_loader_val, model, device, num_tasks, distributed=args.distributed, amp=args.amp, num_crops=args.num_crops, num_clips=args.num_clips, args=args)
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
         return
-
+    # test_stats = evaluate(data_loader_val, model, device, num_tasks, distributed=args.distributed, amp=args.amp, num_crops=args.num_crops, num_clips=args.num_clips, args=args)
+    # print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
     print(f"Start training, currnet max acc is {max_accuracy:.2f}")
     start_time = time.time()
+    eval_count = 0
+
+   
     for epoch in range(args.start_epoch, args.epochs):
 
         if args.distributed:
             labeled_trainloader.sampler.set_epoch(epoch)
             unlabeled_trainloader.sampler.set_epoch(epoch)
-       
+        
+        
         train_stats = train_one_epoch(
             model, criterion, labeled_trainloader, unlabeled_trainloader,
             optimizer, device, epoch, loss_scaler,
@@ -520,10 +538,10 @@ def main(args):
             hard_contrastive=args.hard_contrastive,
             finetune=args.finetune
         )
-        # train_stats = train_ssl(labeled_trainloader, unlabeled_trainloader, model, criterion, optimizer, epoch, mixup_fn, args)
+        
 
-        lr_scheduler.step(epoch)
-
+        lr_sched_cosine.step(epoch)
+        
         test_stats = evaluate(data_loader_val, model, device, num_tasks, distributed=args.distributed, amp=args.amp, args=args)
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
     
@@ -536,9 +554,9 @@ def main(args):
                 checkpoint_paths.append(output_dir / 'model_best.pth')
             for checkpoint_path in checkpoint_paths:
                 state_dict = {
-                    'model': model_without_ddp.state_dict(),
+                    'model': model.state_dict(), #model_without_ddp.state_dict(),
                     'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'lr_scheduler': lr_sched_cosine.state_dict(),
                     'epoch': epoch,
                     'args': args,
                     'scaler': loss_scaler.state_dict(),
@@ -549,9 +567,9 @@ def main(args):
                 utils.save_on_master(state_dict, checkpoint_path)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()},
-                     'epoch': epoch,
-                     'n_parameters': n_parameters}
+                    **{f'test_{k}': v for k, v in test_stats.items()},
+                    'epoch': epoch,
+                    'n_parameters': n_parameters}
 
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:

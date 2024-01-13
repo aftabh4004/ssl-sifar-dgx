@@ -1,2 +1,6 @@
 UCF-101/
 output*/
+saveckpt/
+sifar_base_patch4_window14_224_3x3-kinetics400_f8_pe_aug.pth
+__pycache__/
+sifar_pytorch/__pycache__/

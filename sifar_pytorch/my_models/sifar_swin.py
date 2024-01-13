@@ -79,6 +79,7 @@ def window_partition(x, window_size):
         windows: (num_windows*B, window_size, window_size, C)
     """
     B, H, W, C = x.shape
+    # print("window size ", window_size, B ,H, W, C)
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
     return windows
@@ -558,6 +559,8 @@ class SwinTransformer(nn.Module):
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
                  use_checkpoint=False, super_img_rows=1, bottleneck=False, **kwargs):
+        print("Swin transformer called")
+        
         super().__init__()
 
         self.duration = duration
@@ -583,6 +586,8 @@ class SwinTransformer(nn.Module):
         if self.image_mode:
             super_img_dim = (super_img_rows, self.duration // super_img_rows)
             super_img_size = (img_size * super_img_dim[0], img_size * super_img_dim[1])
+            print("img_size:",img_size)
+            # exit(0)
         else:
            super_img_size = (img_size, img_size)
         
@@ -884,6 +889,7 @@ def _conv_filter(state_dict, patch_size=4):
 
 
 def _create_vision_transformer(variant, pretrained=False, pretrained_window_size=7, **kwargs):
+    print("_create_vision_transformer called")
     default_cfg = default_cfgs[variant]
     default_num_classes = default_cfg['num_classes']
     default_img_size = default_cfg['input_size'][-1]
@@ -893,6 +899,8 @@ def _create_vision_transformer(variant, pretrained=False, pretrained_window_size
     repr_size = kwargs.pop('representation_size', None)
 
     model_cls = SwinTransformer
+    print("img_size",img_size)
+    # exit(0)
     model = model_cls(img_size=img_size, num_classes=num_classes, **kwargs)
     model.default_cfg = default_cfg
 
@@ -1051,6 +1059,7 @@ def sifar_base_patch4_window14_224_3x3(pretrained=False, **kwargs):
     """ ViT-Base (ViT-B/16) from original paper (https://arxiv.org/abs/2010.11929).
     ImageNet-1k weights fine-tuned from in21k @ 224x224, source https://github.com/google-research/vision_transformer.
     """
+    print("function called: sifar_base_patch4_window14_224_3x3")
     temporal_module_name = kwargs.pop('temporal_module_name', None)
     temporal_attention_only = kwargs.pop('temporal_attention_only', None)
     temporal_heads_scale = kwargs.pop('temporal_heads_scale', 1.0)
@@ -1085,6 +1094,8 @@ def sifar_base_patch4_window12_192_3x3(pretrained=False, **kwargs):
     """ ViT-Base (ViT-B/16) from original paper (https://arxiv.org/abs/2010.11929).
     ImageNet-1k weights fine-tuned from in21k @ 224x224, source https://github.com/google-research/vision_transformer.
     """
+    print("function called: sifar_base_patch4_window12_192_3x3")
+
     temporal_module_name = kwargs.pop('temporal_module_name', None)
     temporal_attention_only = kwargs.pop('temporal_attention_only', None)
     temporal_heads_scale = kwargs.pop('temporal_heads_scale', 1.0)

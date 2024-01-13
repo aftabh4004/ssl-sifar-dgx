@@ -322,7 +322,7 @@ def create_super_image(x, isLabeled=True):
     super_image_3x3 = rearrange(x, 'b (th tw c) h w -> b c (th h) (tw w)', th=3, c=3)
 
     if not isLabeled:
-        img_size = (336, 336)
+        img_size = (288, 288)
         # print("seg4 shape", seg4_image.shape)
         # stack = None
         # for i in range(0, 12, 3):

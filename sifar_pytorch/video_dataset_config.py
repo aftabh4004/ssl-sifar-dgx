@@ -14,11 +14,13 @@ DATASET_CONFIG = {
     'mini_st2stv2': {
         'num_classes': 87,
         'train_list_name': 'mini_train.txt',
-        'val_list_name': 'mini_val.txt',
+        'val_list_name': 'mini_test.txt',
         'test_list_name': 'mini_test.txt',
         'filename_seperator': " ",
-        'image_tmpl': '{:05d}.jpg',
+        'image_tmpl': '{:06d}.jpg',
         'filter_video': 3,
+        'train_label_list_name': 'labeled_training_minisv2.txt',
+        'train_unlabel_list_name': 'unlabeled_training_minisv2.txt'
     },
     'st2stv1': {
         'num_classes': 174,

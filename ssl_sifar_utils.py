@@ -35,7 +35,7 @@ def validate_split(labeled_file_path, unlabeled_file_path):
     for label in range(101):
         per = main_dict_label[label] / (main_dict_label[label] + main_dict_unlabel[label])
         
-        if(per > 0.06 or per < 0.04):
+        if(per > 0.55 or per < 0.45):
             print('\033[91m' + '{:<10} {:.6f}'.format(label, per) + '\033[0m')
         else:
             print('\033[92m' + '{:<10} {:.6f}'.format(label, per) + '\033[0m')
