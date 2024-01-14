@@ -165,7 +165,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4  main.py \
  --model sifar_base_patch4_window12_192_3x3 \
  --output_dir './output/test/' --hpe_to_token \
  --sup_thresh 25 --num_workers 4 --mu 4 --input_size 192 --temperature 0.5 \
- --gamma 0.6 --beta 1
+ --gamma 0.6 --beta 1 --no-amp
 
 
 python3  main.py \
@@ -179,3 +179,6 @@ python3  main.py \
  --output_dir './output/run2recreateres_10pre_ucf_lr1e-5bs2mu4gamma0.6beta1temp0.5/' --hpe_to_token \
  --sup_thresh 25 --num_workers 4 --mu 4 --input_size 192 --temperature 0.5 \
  --gamma 0.6 --beta 1
+
+
+ 
