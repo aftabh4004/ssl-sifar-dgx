@@ -12,7 +12,7 @@ from PIL import Image
 from torch.nn import functional as F
 
 
-def validate_split(labeled_file_path, unlabeled_file_path):
+def validate_split(labeled_file_path, unlabeled_file_path, percentage):
     main_dict_label= defaultdict(int)
     ul_lines = 0
     l_lines = 0
@@ -35,10 +35,10 @@ def validate_split(labeled_file_path, unlabeled_file_path):
     for label in range(101):
         per = main_dict_label[label] / (main_dict_label[label] + main_dict_unlabel[label])
         
-        if(per > 0.55 or per < 0.45):
-            print('\033[91m' + '{:<10} {:.6f}'.format(label, per) + '\033[0m')
-        else:
+        if(per > (percentage - 2) / 100 and per < (percentage + 2) / 100 ):
             print('\033[92m' + '{:<10} {:.6f}'.format(label, per) + '\033[0m')
+        else:
+            print('\033[91m' + '{:<10} {:.6f}'.format(label, per) + '\033[0m')
     
    
     print(f"Total labeled video: {l_lines}")

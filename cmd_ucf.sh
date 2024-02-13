@@ -169,10 +169,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4  main.py \
 
 
 python3  main.py \
- --data_dir '/home/prithwish/aftab/dataset/UCF-101' \
- --list_root '/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/ucf10per' \
+ --data_dir '/scratch1/dataset/ucf101/videos' \
+ --list_root '/home/omprakash/aftab/ssl-sifar-dgx/dataset_list/kadamini/ucf101_10per' \
  --use_pyav --dataset 'ucf101' \
- --opt adamw --lr 1e-5 --epochs 35 --sched cosine --duration 8 --batch-size 2 \
+ --opt adamw --lr 1e-5 --epochs 150 --sched cosine --duration 8 --batch-size 2 \
  --super_img_rows 3 --disable_scaleup \
  --mixup 0.8 --cutmix 1.0 --drop-path 0.1 --pretrained  \
  --model sifar_base_patch4_window12_192_3x3 \

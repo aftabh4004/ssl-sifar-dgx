@@ -145,7 +145,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         super_image_lab = create_super_image(samples, isLabeled=True)
 
         with torch.cuda.amp.autocast(enabled=amp): #, dtype=torch.float16):
-            outputs = model(super_image_lab)
+            
             if epoch >= args.sup_thresh:
                 assert not torch.isnan(super_image_3x3).any()
                 assert not torch.isnan(super_image_2x2).any()
@@ -180,45 +180,47 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     
 
                  
-                assert not np.isnan(contrastive_loss.item())  
-
-            if simclr_criterion is not None:
-                # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, bs x 2 x dim
-                loss_ce = criterion(outputs[0], targets)
-                loss_simclr = simclr_criterion(outputs[1])
-                loss = loss_ce * (1.0 - simclr_w) + loss_simclr * simclr_w
-            elif simsiam_criterion is not None:
-                # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, 4[bs x dim], [p1, z1, p2, z2]
-                loss_ce = criterion(outputs[0], targets)
-                loss_simsiam = simsiam_criterion(*outputs[1])
-                loss = loss_ce * (1.0 - simsiam_w) + loss_simsiam * simsiam_w
-            elif branch_div_criterion is not None:
-                # outputs 0: ce logits, bs x class, outputs 1: embeddings of K branches, K[bs x dim]
-                loss_ce = criterion(outputs[0], targets)
-                loss_div = 0.0
-                for i in range(0, len(outputs[1]), 2):
-                    loss_div += torch.mean(branch_div_criterion(outputs[1][i], outputs[1][i + 1]))
-                loss = loss_ce * (1.0 - branch_div_w) + loss_div * branch_div_w
-            elif moco_criterion is not None:
-                loss_ce = criterion(outputs[0], targets)
-                loss_moco = moco_criterion(outputs[1][0], outputs[1][1])
-                loss = loss_ce * (1.0 - moco_w) + loss_moco * moco_w
-            elif byol_criterion is not None:
-                loss_ce = criterion(outputs[0], targets)
-                loss_byol = byol_criterion(*outputs[1])
-                loss = loss_ce * (1.0 - byol_w) + loss_byol * byol_w
+                assert not np.isnan(contrastive_loss.item())
             else:
-                if isinstance(criterion, (DeepMutualLoss, ONELoss, SelfDistillationLoss)):
-                    loss, loss_ce, loss_kd = criterion(outputs, targets)
-                else:
-                    loss = criterion(outputs, targets)
+                outputs = model(super_image_lab)
 
-        loss_value = loss.item()
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-            raise ValueError("Loss is {}, stopping training".format(loss_value))
+                if simclr_criterion is not None:
+                    # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, bs x 2 x dim
+                    loss_ce = criterion(outputs[0], targets)
+                    loss_simclr = simclr_criterion(outputs[1])
+                    loss = loss_ce * (1.0 - simclr_w) + loss_simclr * simclr_w
+                elif simsiam_criterion is not None:
+                    # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, 4[bs x dim], [p1, z1, p2, z2]
+                    loss_ce = criterion(outputs[0], targets)
+                    loss_simsiam = simsiam_criterion(*outputs[1])
+                    loss = loss_ce * (1.0 - simsiam_w) + loss_simsiam * simsiam_w
+                elif branch_div_criterion is not None:
+                    # outputs 0: ce logits, bs x class, outputs 1: embeddings of K branches, K[bs x dim]
+                    loss_ce = criterion(outputs[0], targets)
+                    loss_div = 0.0
+                    for i in range(0, len(outputs[1]), 2):
+                        loss_div += torch.mean(branch_div_criterion(outputs[1][i], outputs[1][i + 1]))
+                    loss = loss_ce * (1.0 - branch_div_w) + loss_div * branch_div_w
+                elif moco_criterion is not None:
+                    loss_ce = criterion(outputs[0], targets)
+                    loss_moco = moco_criterion(outputs[1][0], outputs[1][1])
+                    loss = loss_ce * (1.0 - moco_w) + loss_moco * moco_w
+                elif byol_criterion is not None:
+                    loss_ce = criterion(outputs[0], targets)
+                    loss_byol = byol_criterion(*outputs[1])
+                    loss = loss_ce * (1.0 - byol_w) + loss_byol * byol_w
+                else:
+                    if isinstance(criterion, (DeepMutualLoss, ONELoss, SelfDistillationLoss)):
+                        loss, loss_ce, loss_kd = criterion(outputs, targets)
+                    else:
+                        loss = criterion(outputs, targets)
+
+                loss_value = loss.item()
+                if not math.isfinite(loss_value):
+                    print("Loss is {}, stopping training".format(loss_value))
+                    raise ValueError("Loss is {}, stopping training".format(loss_value))
         
-        total_loss = loss + args.gamma * contrastive_loss + args.beta * group_contrastive_loss
+        total_loss = args.gamma * contrastive_loss + args.beta * group_contrastive_loss + loss
         # total_loss = loss + args.beta * group_contrastive_loss
 
         
@@ -304,7 +306,7 @@ def evaluate(data_loader, model, device, world_size, args, distributed=True, amp
         # compute output
         batch_size = images.shape[0]
         #images = images.view((batch_size * num_crops * num_clips, -1) + images.size()[2:])
-        with torch.cuda.amp.autocast(enabled=amp, dtype=torch.float16):
+        with torch.cuda.amp.autocast(enabled=amp):
             super_image_val = create_super_image(images, isLabeled=True)
             output = model(super_image_val)
             #loss = criterion(output, target)

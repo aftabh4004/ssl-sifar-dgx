@@ -1,5 +1,8 @@
+import argparse
+from pathlib import Path
 import cv2
 from ssl_sifar_utils import get_training_filenames, validate_split
+import os
 
 def get_video_frame_count(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -23,71 +26,78 @@ def create_label_dict(path):
         
     return label_to_idx
 
-def create_train_val_list(dataset_root, listpath, label_to_idx, list_dir):
+def create_train_val_list(dataset_root, listpath, label_to_idx, output_dir):
     
     with open(listpath, 'r') as fp:
         lines = fp.readlines()
         train_list = []
         count = 0
-        
+        print("Please Wait...")
         for line in lines:
             vpath = line.split()[0]
             label = vpath.split('/')[0]
             vpath = dataset_root + vpath
             fcount = get_video_frame_count(vpath)
             train_list += [[vpath, str(1), str(fcount), str(label_to_idx[label])]]
-            if count % 50 == 0:
-                print(f"done {count}")
-            count += 1
-        
+            
 
        
-        with open(list_dir + 'train.txt', 'w') as fp:
+        with open(os.path.join(output_dir, 'train.txt'), 'w') as fp:
             for record in train_list:
                 print(" ".join(record), file=fp)
             print("train.txt saved")
-        return list_dir + 'train.txt'
+        return os.path.join(output_dir, 'train.txt')
        
             
 
-def create_test_list(dataset_root, listpath, label_to_idx, list_dir):
+def create_test_list(dataset_root, listpath, label_to_idx, output_dir):
      with open(listpath, 'r') as fp:
         lines = fp.readlines()
         test_list = []
         count = 0
-
+        print('Please Wait...')
         for line in lines:
             vpath = line.split()[0]
             label = vpath.split('/')[0]
             vpath = dataset_root + vpath
             fcount = get_video_frame_count(vpath)
             test_list += [[vpath, str(1), str(fcount), str(label_to_idx[label])]]
-            if count % 50 == 0:
-                print(f"done {count}")
-            count += 1
+            
 
-        with open(list_dir + 'test.txt', 'w') as fp:
+        with open(os.path.join(output_dir, 'test.txt'), 'w') as fp:
             for record in test_list:
                 print(" ".join(record), file=fp)
             print("test.txt saved")
 
-def main():
-    # dataset_root = '/scratch/datasets/UCF-101/Videos/'
-    list_dir = '/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/'
-    # classind_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/classInd.txt"
-    # trainlist_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/ucf101_train_split_1_videos.txt"
-    # testlist_path = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/ucf101_val_split_1_videos.txt"
+def get_args_parser():
+    parser = argparse.ArgumentParser('Datapreparation script', add_help=False)
+    parser.add_argument('--dataset_root',  type=str)
+    parser.add_argument('--output_dir', default='/dataset_list/default', type=str)
+    parser.add_argument('--trainlist_path', type=str)
+    parser.add_argument('--testlist_path', type=str)
+    parser.add_argument('--percentage', type=int, default=10)
+    return parser
 
-    # label_to_idx = create_label_dict(classind_path)
-    # print(label_to_idx)
-    # train_list = create_train_val_list(dataset_root, trainlist_path, label_to_idx, list_dir)
-    # create_test_list(dataset_root, testlist_path, label_to_idx, list_dir)
-    train_list = '/home/prithwish/aftab/workspace/ssl-sifar-dgx/dataset_list/train.txt'
-    train_label_list, train_unlabel_list = get_training_filenames(list_dir, train_list, 0.99, 'classwise')
 
-    validate_split(train_label_list, train_unlabel_list)
+def main(args):
+    
+    classes = os.listdir(args.dataset_root)
+    label_to_idx = {item:i for i, item in enumerate(classes)}
+    print(label_to_idx)
+
+
+    train_list = create_train_val_list(args.dataset_root, args.trainlist_path, label_to_idx, args.output_dir)
+    create_test_list(args.dataset_root, args.testlist_path, label_to_idx, args.output_dir)
+    train_list = os.path.join(args.output_dir, 'train.txt')
+    train_label_list, train_unlabel_list = get_training_filenames(args.output_dir, train_list,(100 - args.percentage) / 100, 'classwise')
+
+    validate_split(train_label_list, train_unlabel_list, args.percentage)
 
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser('Dataset perperation script', parents=[get_args_parser()])
+    args = parser.parse_args()
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    main(args)

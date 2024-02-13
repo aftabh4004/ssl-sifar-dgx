@@ -276,8 +276,8 @@ def get_args_parser():
 
 
 def main(args):
-    #args.distributed = False
-    utils.init_distributed_mode(args)
+    args.distributed = False
+    # utils.init_distributed_mode(args)
     args_dict = vars(args)
 
     
@@ -342,8 +342,6 @@ def main(args):
 
     # model= nn.DataParallel(model)
     model.to(device)
-    print(model)
-    # return
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
@@ -353,13 +351,13 @@ def main(args):
             device='cpu' if args.model_ema_force_cpu else '',
             resume='')
 
-    #model_without_ddp = model
-    if args.distributed:
-        print("Using distributed training...")
-        #model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
-        # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        model = torch.nn.DataParallel(model, device_ids=[args.gpu]).cuda()
-        #model_without_ddp = model.module
+    # model_without_ddp = model
+    # if args.distributed:
+    #     print("Using distributed training...")
+    #     #model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+    #     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+    #     model = torch.nn.DataParallel(model, device_ids=[args.gpu]).cuda()
+    #     #model_without_ddp = model.module
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
