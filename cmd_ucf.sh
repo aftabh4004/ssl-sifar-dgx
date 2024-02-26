@@ -181,4 +181,18 @@ python3  main.py \
  --gamma 0.6 --beta 1
 
 
+
+CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=4  main.py \
+ --data_dir '/home/mt0/22CS60R54/datasets/ucf101/videos/' \
+ --list_root '/home/mt0/22CS60R54/ssl-sifar-dgx/dataset_list/ucf_10per' \
+ --use_pyav --dataset 'ucf101' \
+ --opt adamw --lr 1e-5 --epochs 150 --sched cosine --duration 8 --batch-size 1 \
+ --super_img_rows 3 --disable_scaleup \
+ --mixup 0.8 --cutmix 1.0 --drop-path 0.1 --pretrained  \
+ --model sifar_base_patch4_window12_192_3x3 \
+ --output_dir './output/test/' --hpe_to_token \
+ --sup_thresh 25 --num_workers 4 --mu 4 --input_size 192 --temperature 0.5 \
+ --gamma 0.6 --beta 1
+
+
  

@@ -13,6 +13,7 @@ import torch.backends.cudnn as cudnn
 import json
 import os
 import warnings
+import logging
 
 from pathlib import Path
 
@@ -272,8 +273,12 @@ def get_args_parser():
 
     parser.add_argument('--auto_resume', action='store_true', default=False,
                     help='automatically resume from the output dir checkpoint')
-    return parser
 
+    parser.add_argument('--pretrained_path', type=str, default='', help='path to the pretrained ckpt imagenet')
+    parser.add_argument('--no_flip', action='store_true', default=False, 
+                    help='Disable RandomHorizontalFlip in augmentaion')
+    
+    return parser
 
 def main(args):
     args.distributed = False
@@ -335,14 +340,18 @@ def main(args):
         drop_rate=args.drop,
         drop_path_rate=args.drop_path,
         drop_block_rate=args.drop_block,
-        use_checkpoint=args.use_checkpoint
+        use_checkpoint=args.use_checkpoint,
+        ## added by aftab, for loading pretrained imagenet from ckpt
+        pretrained_model=args.pretrained_path
     )
 
     # TODO: finetuning
 
-    # model= nn.DataParallel(model)
+    model= nn.DataParallel(model)
     model.to(device)
     model_ema = None
+    print(model)
+
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
         model_ema = ModelEma(
@@ -365,7 +374,7 @@ def main(args):
     #linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
     #args.lr = linear_scaled_lr
     optimizer = create_optimizer(args, model)
-    loss_scaler = NativeScaler()
+    loss_scaler = NativeScalerWithGradNormCount()
     #print(f"Scaled learning rate (batch size: {args.batch_size * utils.get_world_size()}): {linear_scaled_lr}")
     
     
@@ -460,7 +469,7 @@ def main(args):
     
 
     train_augmentor = get_augmentor(True, args.input_size, mean, std, threed_data=args.threed_data,
-                                    version=args.augmentor_ver, scale_range=args.scale_range, dataset=args.dataset)
+                                    version=args.augmentor_ver, scale_range=args.scale_range, dataset=args.dataset, no_flip=args.no_flip)
     dataset_labeled_train = video_data_cls(args.data_dir, train_label_list, args.duration, args.frames_per_group,
                                    num_clips=args.num_clips,
                                    modality=args.modality, image_tmpl=image_tmpl,
@@ -485,7 +494,7 @@ def main(args):
     val_list = os.path.join(args.list_root, val_list_name)
     val_augmentor = get_augmentor(False, args.input_size, mean, std, args.disable_scaleup,
                                   threed_data=args.threed_data, version=args.augmentor_ver,
-                                  scale_range=args.scale_range, num_clips=args.num_clips, num_crops=args.num_crops, dataset=args.dataset)
+                                  scale_range=args.scale_range, num_clips=args.num_clips, num_crops=args.num_crops, dataset=args.dataset, no_flip=args.no_flip)
     dataset_val = video_data_cls(args.data_dir, val_list, args.duration, args.frames_per_group,
                                  num_clips=args.num_clips,
                                  modality=args.modality, image_tmpl=image_tmpl,
@@ -545,7 +554,7 @@ def main(args):
     
         max_accuracy = max(max_accuracy, test_stats["acc1"])
         print(f'Max accuracy: {max_accuracy:.2f}%')
-
+        
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             if test_stats["acc1"] == max_accuracy:
@@ -584,4 +593,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(level=logging.INFO, 
+                            filename=os.path.join(args.output_dir, 'logs.log'),
+                            filemode="w",
+                            format="%(name)s %(asctime)s %(levelname)s %(message)s"
+                            )
+
     main(args)

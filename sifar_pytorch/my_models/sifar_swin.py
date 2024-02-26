@@ -16,6 +16,8 @@ import logging
 from einops import rearrange, reduce, repeat
 import math
 from .sifar_util import frames_to_super_image, super_image_to_frames
+from .revswin import ReversibleSwinTransformer
+
 
 _logger = logging.getLogger(__name__)
 
@@ -637,6 +639,24 @@ class SwinTransformer(nn.Module):
         self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
 
         self.apply(self._init_weights)
+        # print("=================================================================")
+        # print(self.duration ,
+        # self.num_classes ,
+        # self.num_layers ,
+        # self.embed_dim,
+        # self.ape ,
+        # self.patch_norm ,
+        # self.num_features ,
+        # self.mlp_ratio ,
+        # self.super_img_rows,
+
+        # self.img_size,
+        # self.window_size ,
+        # self.image_mode,
+        # depths,
+        # )
+
+        # print("=================================================================")
 
 
     def _init_weights(self, m):
@@ -744,21 +764,26 @@ class SwinTransformer(nn.Module):
 
 
 def load_pretrained(model, cfg=None, num_classes=1000, in_chans=3, filter_fn=None, img_size=224, num_patches=196,
-                 pretrained_window_size=7, pretrained_model="", strict=True):
+                 pretrained_window_size=7, pretrained_model="", strict=True, pretrain_path=None):
+    
     if cfg is None:
         cfg = getattr(model, 'default_cfg')
     if cfg is None or 'url' not in cfg or not cfg['url']:
         _logger.warning("Pretrained model URL is invalid, using random initialization.")
         return
+    
+    # import ipdb;ipdb.set_trace()
 
     if len(pretrained_model) == 0:
         # state_dict = model_zoo.load_url(cfg['url'], progress=False, map_location='cpu')
         state_dict = load_state_dict_from_url(cfg['url'], progress=False, map_location='cpu')
     else:
-        try:
-            state_dict = load_state_dict(pretrained_model)['model']
-        except:
-            state_dict = load_state_dict(pretrained_model)
+        print(f"Loading from pretrained_model {pretrained_model}")
+        ## edited by aftab
+        # try:
+        #     state_dict = torch.load(pretrained_model)['model']
+        # except:
+        state_dict = torch.load(pretrained_model)
 
     if filter_fn is not None:
         state_dict = filter_fn(state_dict)
@@ -832,7 +857,11 @@ def load_pretrained(model, cfg=None, num_classes=1000, in_chans=3, filter_fn=Non
     for key in state_dict['model']:
         if 'attn_mask' in key:
             del new_state_dict[key]
-
+        
+        ##added by owais
+        if len(pretrained_model) == 0 and ('norm.bias' == key or 'norm.weight' == key):
+            new_state_dict[key] = torch.cat([new_state_dict[key], new_state_dict[key]], dim=-1)
+                
         #if window_size != pretrained_window_size:
         if 1:
             if 'relative_position_index' in key:
@@ -840,6 +869,7 @@ def load_pretrained(model, cfg=None, num_classes=1000, in_chans=3, filter_fn=Non
 
              # resize it
             if 'relative_position_bias_table' in key:
+                # import ipdb; ipdb.set_trace()
                 #print ('resizing relative_position_bias_table')
                 pretrained_table = state_dict['model'][key]
                 pretrained_table_size = int(math.sqrt(pretrained_table.shape[0]))
@@ -872,9 +902,21 @@ def load_pretrained(model, cfg=None, num_classes=1000, in_chans=3, filter_fn=Non
     '''
 
     print ('loading weights....')
-    ## Loading the weights
-    model.load_state_dict(new_state_dict, strict=False)
     
+
+
+    
+    # import ipdb;ipdb.set_trace()
+    
+    ## Loading the weights
+    ##edited by owais
+    # model.load_state_dict(new_state_dict, strict=True)
+    try:
+        model.load_state_dict(new_state_dict, strict=True)
+    except Exception as e:
+        _logger.warning(e)
+        print("Since Loading weights with strict True not possible so loading weights with string False!!!")
+        model.load_state_dict(new_state_dict, strict=False)
 
 def _conv_filter(state_dict, patch_size=4):
     """ convert patch embedding weight from manual patchify + linear proj to conv"""
@@ -897,10 +939,11 @@ def _create_vision_transformer(variant, pretrained=False, pretrained_window_size
     num_classes = kwargs.pop('num_classes', default_num_classes)
     img_size = kwargs.pop('img_size', default_img_size)
     repr_size = kwargs.pop('representation_size', None)
+    pretrained_model = kwargs.pop('pretrained_model', '')
 
-    model_cls = SwinTransformer
-    print("img_size",img_size)
-    # exit(0)
+    # model_cls = SwinTransformer
+    model_cls = ReversibleSwinTransformer
+    # print("Argrs are:",kwargs)
     model = model_cls(img_size=img_size, num_classes=num_classes, **kwargs)
     model.default_cfg = default_cfg
 
@@ -911,8 +954,10 @@ def _create_vision_transformer(variant, pretrained=False, pretrained_window_size
             filter_fn=_conv_filter,
             img_size=img_size,
             pretrained_window_size=pretrained_window_size,
-            pretrained_model=''
+            pretrained_model=pretrained_model
         )
+    else:
+        print("Without loading any ckpt")
     return model
 
 
@@ -1089,6 +1134,7 @@ def sifar_base_patch4_window14_224_3x3(pretrained=False, **kwargs):
     model = _create_vision_transformer('swin_base_patch4_window7_224_22k', pretrained=pretrained, pretrained_window_size=7, **model_kwargs)
     return model
 
+# we are using
 @register_model
 def sifar_base_patch4_window12_192_3x3(pretrained=False, **kwargs):
     """ ViT-Base (ViT-B/16) from original paper (https://arxiv.org/abs/2010.11929).
@@ -1103,6 +1149,7 @@ def sifar_base_patch4_window12_192_3x3(pretrained=False, **kwargs):
     rel_pos = kwargs.pop('rel_pos', False)
     token_maks = kwargs.pop('token_mask', False)
     frame_cls_tokens = kwargs.pop('frame_cls_tokens', 1)
+    # pretrained_path = kwargs.pop('pretrained_path', '')
     kwargs.pop('hub_attention', '')
     kwargs.pop('hub_aggregation', '')
     kwargs.pop('spatial_hub_size', (-1, -1))
@@ -1122,6 +1169,7 @@ def sifar_base_patch4_window12_192_3x3(pretrained=False, **kwargs):
     bottleneck = True if kwargs.pop('bottleneck', None) is not None else False
     model_kwargs = dict(patch_size=patch_size, img_size=img_size, window_size=window_size, embed_dim=embed_dim, depths=depths, num_heads=num_heads, mlp_ratio=mlp_ratio,
                         use_checkpoint=use_checkpoint, ape=ape, bottleneck=bottleneck, **kwargs)
+    print("model kwargs")
     print(model_kwargs)
     model = _create_vision_transformer('swin_base_patch4_window7_224_22k', pretrained=pretrained, pretrained_window_size=7, **model_kwargs)
     return model

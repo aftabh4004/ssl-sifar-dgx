@@ -14,7 +14,7 @@ from .video_transforms import (GroupRandomHorizontalFlip, GroupOverSample,
 def get_augmentor(is_train: bool, image_size: int, mean: List[float] = None,
                   std: List[float] = None, disable_scaleup: bool = False,
                   threed_data: bool = False, version: str = 'v1', scale_range: [int] = None,
-                  modality: str = 'rgb', num_clips: int = 1, num_crops: int = 1, dataset: str = ''):
+                  modality: str = 'rgb', num_clips: int = 1, num_crops: int = 1, dataset: str = '', no_flip: bool = False):
 
     mean = [0.485, 0.456, 0.406] if mean is None else mean
     std = [0.229, 0.224, 0.225] if std is None else std
@@ -37,7 +37,10 @@ def get_augmentor(is_train: bool, image_size: int, mean: List[float] = None,
                     GroupRandomScale(scale_range),
                     GroupRandomCrop(image_size),
                 ]
-            if not (dataset.startswith('ststv') or 'jester' in dataset or 'mini_ststv' in dataset):
+            ##added by owais
+            ## edited by aftab
+            if not no_flip:#(dataset.startswith('ststv') or 'jester' in dataset or 'mini_ststv' in dataset):
+                print("GroupRandomHorizontalFlip Enabled")
                 augments += [GroupRandomHorizontalFlip(is_flow=(modality == 'flow'))]
         else:
             scaled_size = image_size if disable_scaleup else int(image_size / 0.875 + 0.5)

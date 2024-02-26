@@ -30,6 +30,7 @@ from .losses import DeepMutualLoss, ONELoss, SelfDistillationLoss
 from itertools import cycle
 import torch.nn.functional as F
 
+# @profile
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     labeled_trainloader: Iterable, unlabeled_trainloader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
@@ -100,6 +101,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     pl_losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
+    grad_norms = AverageMeter()
+    
 
 
 
@@ -108,8 +111,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     metric_logger.add_meter('instance_contrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('group_contrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('grad_norm', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 50
+    
+    print_freq = 10
 
     for data in metric_logger.log_every(data_loader, print_freq, lenn if epoch >= args.sup_thresh else len(labeled_trainloader), header):
          #reseting losses
@@ -117,6 +124,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         pl_loss = torch.tensor(0.0).cuda()
         loss = torch.tensor(0.0).cuda()
         group_contrastive_loss = torch.tensor(0.0).cuda()
+        grad_norm = torch.tensor(0.0).cuda()
 
         if epoch >= args.sup_thresh:
             labeled_data,unlabeled_data = data
@@ -127,10 +135,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
             # print("sample target ", samples_u.shape, targets.shape)
             super_image_3x3, super_image_2x2 = create_super_image(samples_u, isLabeled=False)
-            
-            # save_super_image(super_image_3x3, "super_image_3x3_128.jpg")
-            # save_super_image(super_image_2x2, "super_image_2x2_192.jpg")
+            # print(super_image_3x3.shape)
+            # print(super_image_2x2.shape)
 
+            # save_super_image(super_image_3x3, "super_image_3x3_192testpil.jpg")
+            # save_super_image(super_image_2x2, "super_image_2x2_288testpil.jpg")
+            # exit(0)
             # print(super_image_3x3.shape, super_image_2x2.shape)
         else:
             labeled_data = data
@@ -144,81 +154,81 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         # print("sample lab", samples.shape, targets.shape)
         super_image_lab = create_super_image(samples, isLabeled=True)
 
-        with torch.cuda.amp.autocast(enabled=amp): #, dtype=torch.float16):
+        # with torch.cuda.amp.autocast(enabled=amp): #, dtype=torch.float16):
             
-            if epoch >= args.sup_thresh:
-                assert not torch.isnan(super_image_3x3).any()
-                assert not torch.isnan(super_image_2x2).any()
-                output_8f = model(super_image_3x3)
-                output_4f = model(super_image_2x2)
+        if epoch >= args.sup_thresh:
+            # assert not torch.isnan(super_image_3x3).any()
+            # assert not torch.isnan(super_image_2x2).any()
+            output_8f = model(super_image_3x3)
+            output_4f = model(super_image_2x2)
 
-                output_8f_detach = output_8f.detach()
-                contrastive_loss = simclr_loss(torch.softmax(output_8f_detach,dim=1),torch.softmax(output_4f,dim=1), args)
-                grp_unlabeled_8seg = get_group(output_8f_detach)
-                grp_unlabeled_4seg = get_group(output_4f)
-                group_contrastive_loss = compute_group_contrastive_loss(grp_unlabeled_8seg,grp_unlabeled_4seg, args)
+            output_8f_detach = output_8f.detach()
+            contrastive_loss = simclr_loss(torch.softmax(output_8f_detach,dim=1),torch.softmax(output_4f,dim=1), args)
+            grp_unlabeled_8seg = get_group(output_8f_detach)
+            grp_unlabeled_4seg = get_group(output_4f)
+            group_contrastive_loss = compute_group_contrastive_loss(grp_unlabeled_8seg,grp_unlabeled_4seg, args)
+            
+            # if np.isnan(contrastive_loss.item()):
+            #     import ipdb;ipdb.set_trace()
+            # if torch.isnan(output_8f).any():
+            #     print("output8f got NaN", flush=True)
                 
-                if np.isnan(contrastive_loss.item()):
-                    import ipdb;ipdb.set_trace()
-                if torch.isnan(output_8f).any():
-                    print("output8f got NaN", flush=True)
-                   
-                elif torch.isnan(output_4f).any():
-                    print("output4f got NaN", flush=True)
-                   
-                elif torch.isnan(output_8f_detach).any():
-                    print("output8f detach got NaN", flush=True)
+            # elif torch.isnan(output_4f).any():
+            #     print("output4f got NaN", flush=True)
+                
+            # elif torch.isnan(output_8f_detach).any():
+            #     print("output8f detach got NaN", flush=True)
 
-                elif torch.isnan(output_8f).any():
-                    print("output8f detach got NaN", flush=True)
-                      
-                elif torch.isnan(contrastive_loss).any():
-                    print("contrastive_loss got NaN", flush=True)
-                   
-                elif torch.isnan(group_contrastive_loss).any():
-                    print("group_contrastive_loss got NaN", flush=True)
+            # elif torch.isnan(output_8f).any():
+            #     print("output8f detach got NaN", flush=True)
                     
+            # elif torch.isnan(contrastive_loss).any():
+            #     print("contrastive_loss got NaN", flush=True)
+                
+            # elif torch.isnan(group_contrastive_loss).any():
+            #     print("group_contrastive_loss got NaN", flush=True)
+                
 
-                 
-                assert not np.isnan(contrastive_loss.item())
+                
+            # assert not np.isnan(contrastive_loss.item())
+        
+        outputs = model(super_image_lab)
+
+        if simclr_criterion is not None:
+            # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, bs x 2 x dim
+            loss_ce = criterion(outputs[0], targets)
+            loss_simclr = simclr_criterion(outputs[1])
+            loss = loss_ce * (1.0 - simclr_w) + loss_simclr * simclr_w
+        elif simsiam_criterion is not None:
+            # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, 4[bs x dim], [p1, z1, p2, z2]
+            loss_ce = criterion(outputs[0], targets)
+            loss_simsiam = simsiam_criterion(*outputs[1])
+            loss = loss_ce * (1.0 - simsiam_w) + loss_simsiam * simsiam_w
+        elif branch_div_criterion is not None:
+            # outputs 0: ce logits, bs x class, outputs 1: embeddings of K branches, K[bs x dim]
+            loss_ce = criterion(outputs[0], targets)
+            loss_div = 0.0
+            for i in range(0, len(outputs[1]), 2):
+                loss_div += torch.mean(branch_div_criterion(outputs[1][i], outputs[1][i + 1]))
+            loss = loss_ce * (1.0 - branch_div_w) + loss_div * branch_div_w
+        elif moco_criterion is not None:
+            loss_ce = criterion(outputs[0], targets)
+            loss_moco = moco_criterion(outputs[1][0], outputs[1][1])
+            loss = loss_ce * (1.0 - moco_w) + loss_moco * moco_w
+        elif byol_criterion is not None:
+            loss_ce = criterion(outputs[0], targets)
+            loss_byol = byol_criterion(*outputs[1])
+            loss = loss_ce * (1.0 - byol_w) + loss_byol * byol_w
+        else:
+            if isinstance(criterion, (DeepMutualLoss, ONELoss, SelfDistillationLoss)):
+                loss, loss_ce, loss_kd = criterion(outputs, targets)
             else:
-                outputs = model(super_image_lab)
+                loss = criterion(outputs, targets)
 
-                if simclr_criterion is not None:
-                    # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, bs x 2 x dim
-                    loss_ce = criterion(outputs[0], targets)
-                    loss_simclr = simclr_criterion(outputs[1])
-                    loss = loss_ce * (1.0 - simclr_w) + loss_simclr * simclr_w
-                elif simsiam_criterion is not None:
-                    # outputs 0: ce logits, bs x class, outputs 1: normalized embeddings of two views, 4[bs x dim], [p1, z1, p2, z2]
-                    loss_ce = criterion(outputs[0], targets)
-                    loss_simsiam = simsiam_criterion(*outputs[1])
-                    loss = loss_ce * (1.0 - simsiam_w) + loss_simsiam * simsiam_w
-                elif branch_div_criterion is not None:
-                    # outputs 0: ce logits, bs x class, outputs 1: embeddings of K branches, K[bs x dim]
-                    loss_ce = criterion(outputs[0], targets)
-                    loss_div = 0.0
-                    for i in range(0, len(outputs[1]), 2):
-                        loss_div += torch.mean(branch_div_criterion(outputs[1][i], outputs[1][i + 1]))
-                    loss = loss_ce * (1.0 - branch_div_w) + loss_div * branch_div_w
-                elif moco_criterion is not None:
-                    loss_ce = criterion(outputs[0], targets)
-                    loss_moco = moco_criterion(outputs[1][0], outputs[1][1])
-                    loss = loss_ce * (1.0 - moco_w) + loss_moco * moco_w
-                elif byol_criterion is not None:
-                    loss_ce = criterion(outputs[0], targets)
-                    loss_byol = byol_criterion(*outputs[1])
-                    loss = loss_ce * (1.0 - byol_w) + loss_byol * byol_w
-                else:
-                    if isinstance(criterion, (DeepMutualLoss, ONELoss, SelfDistillationLoss)):
-                        loss, loss_ce, loss_kd = criterion(outputs, targets)
-                    else:
-                        loss = criterion(outputs, targets)
-
-                loss_value = loss.item()
-                if not math.isfinite(loss_value):
-                    print("Loss is {}, stopping training".format(loss_value))
-                    raise ValueError("Loss is {}, stopping training".format(loss_value))
+            loss_value = loss.item()
+            if not math.isfinite(loss_value):
+                print("Loss is {}, stopping training".format(loss_value))
+                raise ValueError("Loss is {}, stopping training".format(loss_value))
         
         total_loss = args.gamma * contrastive_loss + args.beta * group_contrastive_loss + loss
         # total_loss = loss + args.beta * group_contrastive_loss
@@ -234,17 +244,17 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         contrastive_losses.update(contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
         group_contrastive_losses.update(group_contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
  
-        # supervised_losses.update(loss.item(), samples.size(0))
-        # contrastive_losses.update(contrastive_loss.item(), args.mu*samples.size(0))
-        # group_contrastive_losses.update(group_contrastive_loss.item(), args.mu*samples.size(0))
-        
-
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
 
         if amp:
-            loss_scaler(total_loss, optimizer, clip_grad=max_norm,
+            # loss_scaler(total_loss, optimizer, clip_grad=max_norm,
+            #             parameters=model.parameters(), create_graph=is_second_order)
+            
+            grad_norm = loss_scaler(total_loss, optimizer, clip_grad=max_norm,
                         parameters=model.parameters(), create_graph=is_second_order)
+            grad_norms.update(grad_norm, samples.size(0))
+            metric_logger.update(grad_norm=grad_norms.avg)
         else:
             total_loss.backward(create_graph=is_second_order)
 
@@ -306,10 +316,10 @@ def evaluate(data_loader, model, device, world_size, args, distributed=True, amp
         # compute output
         batch_size = images.shape[0]
         #images = images.view((batch_size * num_crops * num_clips, -1) + images.size()[2:])
-        with torch.cuda.amp.autocast(enabled=amp):
-            super_image_val = create_super_image(images, isLabeled=True)
-            output = model(super_image_val)
-            #loss = criterion(output, target)
+        # with torch.cuda.amp.autocast(enabled=amp):
+        super_image_val = create_super_image(images, isLabeled=True)
+        output = model(super_image_val)
+        #loss = criterion(output, target)
         output = output.reshape(batch_size, num_crops * num_clips, -1).mean(dim=1)
         #acc1, acc5 = accuracy(output, target, topk=(1, 5))
         

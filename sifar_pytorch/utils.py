@@ -291,7 +291,7 @@ class AverageMeter(object):
 
 
 def save_super_image(x, output):
-    root = "/home/prithwish/aftab/workspace/ssl-sifar-dgx/superimages"
+    root = "/home/mt0/22CS60R54/ssl-sifar-dgx/superimages"
     temp_img = x[0]
     temp_img = temp_img.permute(1, 2, 0)
     numpy_image = temp_img.cpu().numpy()
@@ -324,31 +324,31 @@ def create_super_image(x, isLabeled=True):
     if not isLabeled:
         img_size = (288, 288)
         # print("seg4 shape", seg4_image.shape)
-        # stack = None
-        # for i in range(0, 12, 3):
-        #     frames = seg4_image[:, i:i + 3, :, :]
-        #     framestack = None
-        #     for b in range(frames.shape[0]):    
-        #         pilimage = transforms.ToPILImage()(frames[b])
+        stack = None
+        for i in range(0, 12, 3):
+            frames = seg4_image[:, i:i + 3, :, :]
+            framestack = None
+            for b in range(frames.shape[0]):    
+                pilimage = transforms.ToPILImage()(frames[b])
 
-        #         resized_image = pilimage.resize(img_size)
+                resized_image = pilimage.resize(img_size)
 
-        #         # Convert the resized PIL Image back to a tensor
-        #         resized_tensor = transforms.ToTensor()(resized_image).unsqueeze(0)
+                # Convert the resized PIL Image back to a tensor
+                resized_tensor = transforms.ToTensor()(resized_image).unsqueeze(0)
 
-        #         if framestack is None:
-        #             framestack = resized_tensor
-        #         else:
-        #             framestack = torch.cat((framestack, resized_tensor), dim = 0)
+                if framestack is None:
+                    framestack = resized_tensor
+                else:
+                    framestack = torch.cat((framestack, resized_tensor), dim = 0)
                 
-        #     if stack is None:
-        #         stack = framestack
-        #     else:
-        #         stack = torch.cat((stack, framestack), dim = 1)
+            if stack is None:
+                stack = framestack
+            else:
+                stack = torch.cat((stack, framestack), dim = 1)
             
         
-        seg4_image = nn.functional.interpolate(seg4_image, size=img_size, mode='bilinear')
-        super_image_2x2 = rearrange(seg4_image, 'b (th tw c) h w -> b c (th h) (tw w)', th=2, c=3)
+        # seg4_image = nn.functional.interpolate(seg4_image, size=img_size, mode='bilinear')
+        super_image_2x2 = rearrange(stack, 'b (th tw c) h w -> b c (th h) (tw w)', th=2, c=3)
 
 
     
