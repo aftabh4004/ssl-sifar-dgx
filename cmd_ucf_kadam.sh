@@ -371,3 +371,6 @@ python3 main.py \
  --sup_thresh 0 --num_workers 4 --mu 4 --input_size 192 --temperature 0.5 \
  --gamma 0.6 --beta 1 --pretrained  --no_flip \
  --pretrained_path "/home/mt0/22CS60R54/ssl-sifar-dgx/pretrainedCheckpoints/ckpt_epoch_60.pth" 
+
+
+salloc --gres=gpu:2 --time 23:00:00 --partition=gpupart_q4000 --nodes=1  srun --pty /bin/bash

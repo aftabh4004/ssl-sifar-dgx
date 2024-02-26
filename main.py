@@ -463,7 +463,6 @@ def main(args):
     
     ## Datasets and Dataloaders
 
-    train_list = os.path.join(args.list_root, train_list_name)
     train_label_list = os.path.join(args.list_root, train_label_list_name)
     train_unlabel_list = os.path.join(args.list_root, train_unlabel_list_name)
     
