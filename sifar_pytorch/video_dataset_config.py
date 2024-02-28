@@ -104,10 +104,12 @@ DATASET_CONFIG = {
     'hmdb51': {
         'num_classes': 51,
         'train_list_name': 'train.txt',
-        'val_list_name': 'val.txt',
+        'val_list_name': 'test.txt',
         'filename_seperator': " ",
         'image_tmpl': '{:05d}.jpg',
-        'filter_video': 0
+        'filter_video': 0,
+        'train_label_list_name': 'labeled_training.txt',
+        'train_unlabel_list_name': 'unlabeled_training.txt'
     },
     'jester': {
         'num_classes': 27,

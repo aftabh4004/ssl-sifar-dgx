@@ -91,28 +91,29 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         data_loader = zip(cycle(labeled_trainloader), unlabeled_trainloader)
     else:
         data_loader = labeled_trainloader
-    
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    total_losses = AverageMeter()
-    supervised_losses = AverageMeter()
-    contrastive_losses = AverageMeter()
-    group_contrastive_losses = AverageMeter()
-    pl_losses = AverageMeter()
-    top1 = AverageMeter()
-    top5 = AverageMeter()
-    grad_norms = AverageMeter()
+    ## Average meter changed to SmoothedValue
+    ## removed by aftab, because it is already in add_meter
+    # batch_time = SmoothedValue()
+    # data_time = SmoothedValue()
+    # total_losses = SmoothedValue()
+    # supervised_losses = SmoothedValue()
+    # contrastive_losses = SmoothedValue()
+    # group_contrastive_losses = SmoothedValue()
+    # pl_losses = SmoothedValue()
+    # top1 = SmoothedValue()
+    # top5 = SmoothedValue()
+    # grad_norms = SmoothedValue()
     
 
 
 
     metric_logger = MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('instance_contrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('group_contrastive_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('supervised_loss', SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('grad_norm', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt="{value:.6f} ({global_avg:.4f})"))
+    metric_logger.add_meter('instance_contrastive_loss', SmoothedValue(fmt="{value:.6f} ({global_avg:.4f})"))
+    metric_logger.add_meter('group_contrastive_loss', SmoothedValue(fmt="{value:.6f} ({global_avg:.4f})"))
+    metric_logger.add_meter('supervised_loss', SmoothedValue(fmt="{value:.6f} ({global_avg:.4f})"))
+    metric_logger.add_meter('supervised_loss', SmoothedValue(fmt="{value:.6f} ({global_avg:.4f})"))
+    metric_logger.add_meter('grad_norm', SmoothedValue(fmt="{value:.6f} ({global_avg:.4f})"))
     
     header = 'Epoch: [{}]'.format(epoch)
     
@@ -235,14 +236,14 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         
         # measure accuracy and record loss
-        if epoch >= args.sup_thresh: 
-            total_losses.update(total_loss.item(), samples.size(0)+ args.mu*samples.size(0) )
-        else:
-            total_losses.update(total_loss.item(), samples.size(0))
+        # if epoch >= args.sup_thresh: 
+        #     total_losses.update(total_loss.item(), samples.size(0)+ args.mu*samples.size(0) )
+        # else:
+        #     total_losses.update(total_loss.item(), samples.size(0))
 
-        supervised_losses.update(loss.item(), samples.size(0))
-        contrastive_losses.update(contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
-        group_contrastive_losses.update(group_contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
+        # supervised_losses.update(loss.item(), samples.size(0))
+        # contrastive_losses.update(contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
+        # group_contrastive_losses.update(group_contrastive_loss.item(), samples.size(0)+args.mu*samples.size(0))
  
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
@@ -253,8 +254,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             
             grad_norm = loss_scaler(total_loss, optimizer, clip_grad=max_norm,
                         parameters=model.parameters(), create_graph=is_second_order)
-            grad_norms.update(grad_norm, samples.size(0))
-            metric_logger.update(grad_norm=grad_norms.avg)
+            # grad_norms.update(grad_norm, samples.size(0))
+            # metric_logger.update(grad_norm=grad_norms.item())
         else:
             total_loss.backward(create_graph=is_second_order)
 
@@ -286,11 +287,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             metric_logger.update(loss_ce=loss_ce.item())
             metric_logger.update(loss_kd=loss_kd.item())
         
-        metric_logger.update(loss=total_losses.avg)
+        metric_logger.update(loss=total_loss.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        metric_logger.update(instance_contrastive_loss=contrastive_losses.avg)
-        metric_logger.update(group_contrastive_loss=group_contrastive_losses.avg)
-        metric_logger.update(supervised_loss=supervised_losses.avg)
+        metric_logger.update(instance_contrastive_loss=contrastive_loss.item())
+        metric_logger.update(group_contrastive_loss=group_contrastive_loss.item())
+        metric_logger.update(supervised_loss=loss.item())
+        metric_logger.update(grad_norm=grad_norm.item())
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)

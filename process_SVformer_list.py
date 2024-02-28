@@ -1,17 +1,17 @@
 import argparse
 from pathlib import Path
-import cv2
 import os
+import av
 
 def get_video_frame_count(video_path):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"Error opening video file {video_path}")
+    try:
+        container = av.open(video_path)
+    except:
+        print(f"Error in {video_path}")
         return None
 
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
-    return frame_count
+    nframes = container.streams.video[0].frames
+    return nframes
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Datapreparation script', add_help=False)
@@ -44,6 +44,8 @@ def main(args):
                 path, lable = line.strip().split()
                 path = "/".join(path.split('/')[-2:])
                 nframes = get_video_frame_count(os.path.join(args.dataset_root, path))
+                if nframes is None:
+                    continue
                 print(f"{path} 1 {nframes} {lable}", file=fpo)
                 c += 1
                 if c % 100 == 0:
@@ -64,4 +66,4 @@ if __name__ == "__main__":
 
 # /home/mt0/22CS60R54/datasets/hmdb51/videos
 
-# python3 process_SVformer_list.py --output_dir "./dataset_list/hmdb51_40per_SVformer" --input_dir "/home/mt0/22CS60R54/ssl-sifar-dgx/dataset_list/dataset_list_SVformer/list_hmdb_40" --dataset_root "/home/mt0/22CS60R54/datasets/hmdb51/videos/"
+# python3 process_SVformer_list.py --output_dir "./dataset_list/hmdb51_40per_SVformer" --input_dir "/home/mt0/22CS60R54/ssl-sifar-dgx/dataset_list/dataset_list_SVformer/list_hmdb_40" --dataset_root "/home/mt0/22CS60R54/datasets/hmdb51/"

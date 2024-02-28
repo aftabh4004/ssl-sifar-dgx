@@ -374,3 +374,19 @@ python3 main.py \
 
 
 salloc --gres=gpu:2 --time 23:00:00 --partition=gpupart_q4000 --nodes=1  srun --pty /bin/bash
+
+
+// g4
+// screen -r 960662.node_req2
+python3 main.py \
+ --data_dir '/home/mt0/22CS60R54/datasets/hmdb51' \
+ --list_root '/home/mt0/22CS60R54/ssl-sifar-dgx/dataset_list/hmdb51_40per_SVformer' \
+ --use_pyav --dataset 'hmdb51' \
+ --opt adamw --lr 2e-4 --epochs 200 --sched cosine --duration 8 --batch-size 46 \
+ --super_img_rows 3 --disable_scaleup \
+ --mixup 0.8 --cutmix 1.0 --drop-path 0.1   \
+ --model sifar_base_patch4_window12_192_3x3 \
+ --output_dir './output/revswin_pretrained_from_ckpt_178_with_flip_sup_epoch_200_40per_hmdb_bs46_gamma0.6_beta1_lr2e-4_temp0.5/' --hpe_to_token \
+ --sup_thresh 200 --num_workers 4 --mu 4 --input_size 192 --temperature 0.5 \
+ --gamma 0.6 --beta 1 --pretrained  \
+ --pretrained_path "/home/mt0/22CS60R54/ssl-sifar-dgx/pretrainedCheckpoints/ckpt_epoch_178.pth" 
